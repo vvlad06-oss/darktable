@@ -2863,6 +2863,15 @@ static const dt_action_def_t _action_def_cycle_modules
 
 // cycle modules ends
 
+// Lightroom layout: a toolbar button that the Develop view does not show
+static void _lr_toolbar_hide(GtkWidget *w)
+{
+  if(!w) return;
+  const int views = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "views"));
+  g_object_set_data(G_OBJECT(w), "views", GINT_TO_POINTER(views & ~DT_VIEW_DARKROOM));
+  gtk_widget_hide(w);
+}
+
 void gui_init(dt_view_t *self)
 {
   dt_develop_t *dev = self->data;
@@ -3434,12 +3443,29 @@ void gui_init(dt_view_t *self)
   dt_action_register(DT_ACTION(self), N_("synchronize selection"),
                      _darkroom_do_synchronize_selection_callback,
                      GDK_KEY_x, GDK_CONTROL_MASK);
+
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui"))
+  {
+    // Lightroom's Develop toolbar: clipping, soft proofing, guides and the
+    // second window. the other tools keep their shortcuts
+    GtkWidget *not_in_lightroom[] = { favorite_presets, styles,
+                                      dev->color_assessment.button,
+                                      dev->late_scaling.button,
+                                      dev->rawoverexposed.button,
+                                      dev->profile.gamut_button };
+    for(int i = 0; i < G_N_ELEMENTS(not_in_lightroom); i++)
+      _lr_toolbar_hide(not_in_lightroom[i]);
+  }
 }
 
 void enter(dt_view_t *self)
 {
   // prevent accels_window to refresh
   darktable.view_manager->accels_window.prevent_refresh = TRUE;
+
+  // Lightroom has no focus peaking button in Develop (ctrl+shift+f still works)
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui"))
+    _lr_toolbar_hide(darktable.gui->focus_peaking_button);
 
   // clean the undo list
   dt_undo_clear(darktable.undo, DT_UNDO_DEVELOP);

@@ -3081,6 +3081,19 @@ void gui_init(dt_iop_module_t *self)
   g->bright_sliders[7] = g->bright_magenta =
     dt_bauhaus_slider_from_params(sect, "bright_magenta");
 
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui"))
+  {
+    // the color names of the HSL panel of Lightroom
+    static const char *lr_colors[] = { N_("Red"), N_("Orange"), N_("Yellow"), N_("Green"),
+                                       N_("Aqua"), N_("Blue"), N_("Purple"), N_("Magenta") };
+    for(int i = 0; i < G_N_ELEMENTS(lr_colors); i++)
+    {
+      dt_bauhaus_widget_set_display_label(g->hue_sliders[i], _(lr_colors[i]));
+      dt_bauhaus_widget_set_display_label(g->sat_sliders[i], _(lr_colors[i]));
+      dt_bauhaus_widget_set_display_label(g->bright_sliders[i], _(lr_colors[i]));
+    }
+  }
+
   GtkWidget *options = dt_gui_vbox();
   gtk_stack_add_named(g->stack, options, "3");
   dt_gui_new_collapsible_section

@@ -38,6 +38,8 @@ LIGHTROOM = {
     ("modulename", "white balance"): "Camera White Balance",
     (None, "local contrast"): "Clarity",
     (None, "haze removal"): "Dehaze",
+    ("modulename", "texture"): "Texture",
+    (None, "texture"): "Texture",
     (None, "highlight reconstruction"): "Highlight Recovery",
     (None, "shadows and highlights"): "Shadows & Highlights",
     (None, "rgb levels"): "Levels",

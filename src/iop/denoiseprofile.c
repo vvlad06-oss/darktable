@@ -170,6 +170,9 @@ typedef struct dt_iop_denoiseprofile_gui_data_t
   // backward compatibility options
   GtkWidget *fix_anscombe_and_nlmeans_norm;
   GtkWidget *use_new_vst;
+  // Lightroom Noise Reduction controls
+  GtkWidget *lr_luminance, *lr_detail, *lr_color;
+  dt_gui_collapsible_section_t lr_cs;
 } dt_iop_denoiseprofile_gui_data_t;
 
 typedef struct dt_iop_denoiseprofile_data_t
@@ -2666,6 +2669,11 @@ static int _get_iso_highlight_preservation_shift(dt_image_t *img)
   return shift;
 }
 
+static void _lr_nr_to_params(dt_iop_denoiseprofile_params_t *p,
+                             const float luminance,
+                             const float detail,
+                             const float color);
+
 /** this will be called to init new defaults if a new image is loaded
  * from film strip mode. */
 void reload_defaults(dt_iop_module_t *self)
@@ -2686,6 +2694,10 @@ void reload_defaults(dt_iop_module_t *self)
   d->fix_anscombe_and_nlmeans_norm = TRUE;
   d->use_new_vst = TRUE;
   d->wavelet_color_mode = MODE_Y0U0V0;
+
+  // Lightroom: Luminance 0, Detail 50, Color 25 when switched on
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui"))
+    _lr_nr_to_params(d, 0.0f, 50.0f, 25.0f);
 
   const int iso_shift = _get_iso_highlight_preservation_shift(&self->dev->image_storage);
   d->compensate_hilite_pres = iso_shift > 0;
@@ -3097,6 +3109,8 @@ void gui_changed(dt_iop_module_t *self, GtkWidget *w, void *previous)
   }
 }
 
+static void _lr_nr_update(dt_iop_module_t *self);
+
 void gui_update(dt_iop_module_t *self)
 {
   dt_iop_denoiseprofile_gui_data_t *g = self->gui_data;
@@ -3141,6 +3155,7 @@ void gui_update(dt_iop_module_t *self)
   }
 
   gui_changed(self, NULL, NULL);
+  _lr_nr_update(self);
 }
 
 void gui_reset(dt_iop_module_t *self)
@@ -3571,6 +3586,143 @@ static void denoiseprofile_tab_switch(GtkNotebook *notebook,
   gtk_widget_queue_draw(GTK_WIDGET(g->area));
 }
 
+/* ---------------------------------------------------------------------------
+   Lightroom Noise Reduction: Luminance, Detail and Color drive the wavelet
+   curves of the Y0U0V0 mode (luma and chroma denoised separately).
+   A curve value of 0.5 is the default force of darktable, 0 denoises nothing.
+   Luminance 50 and Color 25 give the default force, Detail tilts the luma
+   curve: low values smooth the fine scales more, high values keep them.
+   ------------------------------------------------------------------------- */
+
+static void _lr_nr_to_params(dt_iop_denoiseprofile_params_t *p,
+                             const float luminance,
+                             const float detail,
+                             const float color)
+{
+  const float luma = 0.5f * sqrtf(CLAMPF(luminance, 0.0f, 100.0f) / 50.0f);
+  const float chroma = MIN(1.0f, 0.5f * sqrtf(CLAMPF(color, 0.0f, 100.0f) / 25.0f));
+  const float fine = 1.0f + (50.0f - CLAMPF(detail, 0.0f, 100.0f)) / 100.0f;
+
+  for(int k = 0; k < DT_IOP_DENOISE_PROFILE_BANDS; k++)
+  {
+    const float x = k / (DT_IOP_DENOISE_PROFILE_BANDS - 1.0f); // 0 coarse, 1 fine
+    p->x[DT_DENOISE_PROFILE_Y0][k] = x;
+    p->x[DT_DENOISE_PROFILE_U0V0][k] = x;
+    p->y[DT_DENOISE_PROFILE_Y0][k] = CLAMPF(luma * (1.0f + (fine - 1.0f) * x), 0.0f, 1.0f);
+    p->y[DT_DENOISE_PROFILE_U0V0][k] = chroma;
+  }
+  if(p->mode != MODE_WAVELETS_AUTO) p->mode = MODE_WAVELETS;
+  p->wavelet_color_mode = MODE_Y0U0V0;
+  p->use_new_vst = TRUE;
+}
+
+static void _lr_nr_update(dt_iop_module_t *self)
+{
+  dt_iop_denoiseprofile_gui_data_t *g = self->gui_data;
+  if(!g || !g->lr_luminance) return;
+  const dt_iop_denoiseprofile_params_t *p = self->params;
+
+  // a module switched off denoises nothing
+  float luminance = 0.0f, detail = 50.0f, color = 0.0f;
+  if(self->enabled)
+  {
+    if((p->mode == MODE_WAVELETS || p->mode == MODE_WAVELETS_AUTO)
+       && p->wavelet_color_mode == MODE_Y0U0V0)
+    {
+      const float coarse = p->y[DT_DENOISE_PROFILE_Y0][0];
+      const float fine = p->y[DT_DENOISE_PROFILE_Y0][DT_IOP_DENOISE_PROFILE_BANDS - 1];
+      float chroma = 0.0f;
+      for(int k = 0; k < DT_IOP_DENOISE_PROFILE_BANDS; k++)
+        chroma += p->y[DT_DENOISE_PROFILE_U0V0][k] / DT_IOP_DENOISE_PROFILE_BANDS;
+      luminance = 200.0f * coarse * coarse;
+      detail = coarse > 1e-4f ? 50.0f - 100.0f * (fine / coarse - 1.0f) : 50.0f;
+      color = 100.0f * chroma * chroma;
+    }
+    else
+    {
+      // other modes have no direct equivalent: the default force
+      luminance = 50.0f;
+      color = 25.0f;
+    }
+  }
+
+  DT_ENTER_GUI_UPDATE();
+  dt_bauhaus_slider_set(g->lr_luminance, CLAMPF(luminance, 0.0f, 100.0f));
+  dt_bauhaus_slider_set(g->lr_detail, CLAMPF(detail, 0.0f, 100.0f));
+  dt_bauhaus_slider_set(g->lr_color, CLAMPF(color, 0.0f, 100.0f));
+  DT_LEAVE_GUI_UPDATE();
+}
+
+static void _lr_nr_callback(GtkWidget *slider, dt_iop_module_t *self)
+{
+  DT_GUARD_GUI_UPDATE();
+  dt_iop_denoiseprofile_gui_data_t *g = self->gui_data;
+  dt_iop_denoiseprofile_params_t *p = self->params;
+
+  _lr_nr_to_params(p, dt_bauhaus_slider_get(g->lr_luminance),
+                   dt_bauhaus_slider_get(g->lr_detail),
+                   dt_bauhaus_slider_get(g->lr_color));
+
+  // reflect the new mode and curves in the darktable controls
+  DT_ENTER_GUI_UPDATE();
+  dt_bauhaus_combobox_set_from_value(g->mode, p->mode);
+  dt_bauhaus_combobox_set_from_value(g->wavelet_color_mode, p->wavelet_color_mode);
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(g->use_new_vst), p->use_new_vst);
+  DT_LEAVE_GUI_UPDATE();
+  gui_changed(self, NULL, NULL);
+  gtk_widget_queue_draw(GTK_WIDGET(g->area));
+
+  dt_dev_add_history_item(darktable.develop, self, TRUE);
+}
+
+static void _lr_nr_history_changed(gpointer instance, dt_iop_module_t *self)
+{
+  _lr_nr_update(self); // follows the module being switched on or off
+}
+
+static void _lr_nr_gui_init(dt_iop_module_t *self)
+{
+  dt_iop_denoiseprofile_gui_data_t *g = self->gui_data;
+
+  GtkWidget *darktable_controls = self->widget;
+
+  g->lr_luminance = dt_bauhaus_slider_new_with_range(self, 0.0f, 100.0f, 1.0f, 0.0f, 0);
+  dt_bauhaus_widget_set_label(g->lr_luminance, N_("lightroom"), N_("luminance"));
+  dt_bauhaus_widget_set_display_label(g->lr_luminance, _("Luminance"));
+  gtk_widget_set_tooltip_text(g->lr_luminance, _("reduces luminance noise (grain)"));
+
+  g->lr_detail = dt_bauhaus_slider_new_with_range(self, 0.0f, 100.0f, 1.0f, 50.0f, 0);
+  dt_bauhaus_widget_set_label(g->lr_detail, N_("lightroom"), N_("detail"));
+  dt_bauhaus_widget_set_display_label(g->lr_detail, _("Detail"));
+  gtk_widget_set_tooltip_text(g->lr_detail,
+                              _("higher values keep more fine detail,\n"
+                                "lower values smooth fine noise more"));
+
+  g->lr_color = dt_bauhaus_slider_new_with_range(self, 0.0f, 100.0f, 1.0f, 25.0f, 0);
+  dt_bauhaus_widget_set_label(g->lr_color, N_("lightroom"), N_("color"));
+  dt_bauhaus_widget_set_display_label(g->lr_color, _("Color"));
+  gtk_widget_set_tooltip_text(g->lr_color, _("reduces color noise (colored speckles)"));
+
+  GtkWidget *slider[] = { g->lr_luminance, g->lr_detail, g->lr_color };
+  for(int i = 0; i < G_N_ELEMENTS(slider); i++)
+  {
+    dt_bauhaus_slider_set_format(slider[i], "");
+    g_signal_connect(G_OBJECT(slider[i]), "value-changed", G_CALLBACK(_lr_nr_callback), self);
+  }
+
+  self->widget = dt_gui_vbox(g->lr_luminance, g->lr_detail, g->lr_color);
+
+  // all the darktable controls, folded below
+  dt_gui_new_collapsible_section(&g->lr_cs,
+                                 "plugins/darkroom/denoiseprofile/expand_darktable_controls",
+                                 _("darktable controls"),
+                                 GTK_BOX(self->widget),
+                                 DT_ACTION(self));
+  dt_gui_box_add(g->lr_cs.container, darktable_controls);
+
+  DT_CONTROL_SIGNAL_HANDLE(DT_SIGNAL_DEVELOP_HISTORY_CHANGE, _lr_nr_history_changed);
+}
+
 void gui_init(dt_iop_module_t *self)
 {
   dt_iop_denoiseprofile_gui_data_t *g = IOP_GUI_ALLOC(denoiseprofile);
@@ -3781,6 +3933,8 @@ void gui_init(dt_iop_module_t *self)
                                 "it is more flexible but could give small\n"
                                 "differences in the images already processed."));
 
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui"))
+    _lr_nr_gui_init(self);
 }
 
 void gui_cleanup(dt_iop_module_t *self)

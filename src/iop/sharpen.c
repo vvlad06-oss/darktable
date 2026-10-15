@@ -425,6 +425,31 @@ void gui_init(dt_iop_module_t *self)
   g->threshold = dt_bauhaus_slider_from_params(self, N_("threshold"));
   dt_bauhaus_slider_set_digits(g->threshold, 3);
   gtk_widget_set_tooltip_text(g->threshold, _("threshold to activate sharpen"));
+
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui"))
+  {
+    // Lightroom Sharpening: Amount 0..150 (40), Radius 0.5..3.0 (1.0),
+    // Masking 0..100 (10 = the default noise threshold)
+    dt_bauhaus_widget_set_display_label(g->amount, _("Amount"));
+    dt_bauhaus_slider_set_factor(g->amount, 80.0f);
+    dt_bauhaus_slider_set_digits(g->amount, 0);
+    dt_bauhaus_slider_set_soft_range(g->amount, 0.0f, 1.875f);
+
+    dt_bauhaus_widget_set_display_label(g->radius, _("Radius"));
+    dt_bauhaus_slider_set_factor(g->radius, 0.5f);
+    dt_bauhaus_slider_set_digits(g->radius, 1);
+    dt_bauhaus_slider_set_soft_range(g->radius, 1.0f, 6.0f);
+
+    dt_bauhaus_widget_set_display_label(g->threshold, _("Masking"));
+    dt_bauhaus_slider_set_factor(g->threshold, 20.0f);
+    dt_bauhaus_slider_set_digits(g->threshold, 0);
+    dt_bauhaus_slider_set_soft_range(g->threshold, 0.0f, 5.0f);
+    gtk_widget_set_tooltip_text(g->threshold,
+                                _("sharpen only the edges above this contrast,\n"
+                                  "keeping flat areas and noise smooth"));
+
+    gtk_box_reorder_child(GTK_BOX(self->widget), g->amount, 0);
+  }
 }
 
 #undef MAXR

@@ -28,6 +28,15 @@ Fiecare push pe `lightroom-ui` construiește automat un .dmg nou (workflow `.git
 | Previous / Reset | jos în panoul drept; Previous = setările pozei editate anterior, Reset = setări implicite (Ctrl+Z le aduce înapoi) | `src/libs/lr_previous_reset.c` |
 | Valori pornire | Shadows, Highlights, Clarity, Dehaze pornesc de la 0, ca în Lightroom; Clarity e -100…+100 | `src/iop/shadhi.c`, `bilat.c`, `hazeremoval.c` |
 | Setări | rotița mouse-ului derulează panourile; totul se poate opri din preferences (darkroom → „Lightroom Classic layout”, misc → „Lightroom-style sliders”) | `data/darktableconfig.xml.in`, `src/gui/gtk.c` |
+| Treatment și White Balance | Treatment Color / Black & White; WB As Shot, Daylight, Cloudy, Shade, Tungsten, Fluorescent, Flash, Custom; Temp (scară logaritmică, pistă albastru→galben, pipetă) și Tint (scara Adobe, verde→magenta) pentru orice iluminant; dublu-click = As Shot. Totul comandă iluminantul CAT din color calibration | `src/iop/channelmixerrgb.c` |
+| Valori ca în Lightroom | Exposure „0.00” la redarea implicită (+0.7 EV ascuns), Contrast (color balance rgb, 0 = neutru), Whites, Blacks (inversat, 0 la nivelul implicit), Dehaze, Vibrance, Saturation, Clarity: -100…+100 fără unități; zero se scrie „0” fără semn | `src/iop/exposure.c`, `colorbalancergb.c`, `hazeremoval.c`, `bilat.c`, `src/bauhaus/bauhaus.c` |
+| Texture | modul nou de procesare: contrastul detaliilor medii (în EV, între zgomot și Clarity), -100 netezește, +100 accentuează | `src/iop/texture.c`, `src/common/iop_order.c` |
+| Noise Reduction | Luminance / Detail / Color (0 / 50 / 25 la pornire) peste wavelets Y0U0V0; opțiunile darktable rămân pliate în „darktable controls” | `src/iop/denoiseprofile.c` |
+| Sharpening | Amount 0…150 (40), Radius 0.5…3.0 (1.0), Masking | `src/iop/sharpen.c` |
+| HSL / Color | slidere Red, Orange, Yellow, Green, Aqua, Blue, Purple, Magenta, vizibile implicit | `src/iop/colorequal.c` |
+| Histogramă | RGB liniară, cu ISO, mm, f/ și timpul de expunere dedesubt | `src/libs/histogram.c` |
+| Coloana dreaptă | fără taburi de grupuri și fără căutare (scurtătura „search modules” o aduce înapoi); antetul „Basic ▼” pliază panoul | `src/libs/modulegroups.c` |
+| Develop | fără bara Filter / Sort deasupra pozei (Preferences: meniul darktable); sub poză doar clipping, soft proofing, guides, second window; stânga fără Color Picker, Virtual Copies, Keywording, Info, Masking, Export; fără Module Order | `src/views/darkroom.c`, `src/common/darktable.c` (pasul 2 al configurării, `plugins/darkroom/lightroom_ui_version`) |
 
 ## Ce nu are echivalent (deocamdată)
 

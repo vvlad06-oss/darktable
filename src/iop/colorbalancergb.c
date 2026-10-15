@@ -2304,6 +2304,23 @@ void gui_init(dt_iop_module_t *self)
     dt_bauhaus_slider_set_stop(g->midtones_Y, stop, Y, Y, Y);
   }
 
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui"))
+  {
+    // Lightroom Basic panel (Contrast, Whites, Vibrance, Saturation):
+    // whole numbers from -100 to +100, no unit, plain tracks
+    GtkWidget *half_range[] = { g->contrast, g->highlights_Y, g->vibrance };
+    for(int i = 0; i < G_N_ELEMENTS(half_range); i++)
+    {
+      dt_bauhaus_slider_set_factor(half_range[i], 200.0f);
+      dt_bauhaus_slider_set_digits(half_range[i], 0);
+      dt_bauhaus_slider_set_format(half_range[i], "");
+    }
+    dt_bauhaus_slider_set_factor(g->saturation_global, 100.0f);
+    dt_bauhaus_slider_set_digits(g->saturation_global, 0);
+    dt_bauhaus_slider_set_format(g->saturation_global, "");
+    dt_bauhaus_slider_clear_stops(g->highlights_Y);
+  }
+
   // main widget is the notebook
   self->widget = GTK_WIDGET(g->notebook);
 }

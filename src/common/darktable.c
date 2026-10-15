@@ -1717,6 +1717,38 @@ int dt_init(int argc,
     dt_conf_set_bool("plugins/darkroom/lightroom_ui_initialized", TRUE);
   }
 
+  // later steps of the Lightroom layout, applied once to every configuration
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui")
+     && dt_conf_get_int("plugins/darkroom/lightroom_ui_version") < 2)
+  {
+    // panels that the Develop module of Lightroom does not have; they can
+    // be shown again from the panel's context menu
+    static const char *not_in_develop[] =
+      { "colorpicker", "duplicate", "tagging", "metadata_view", "masks", "export", "ioporder" };
+    for(int layout = 0; layout < 2; layout++)
+      for(int i = 0; i < G_N_ELEMENTS(not_in_develop); i++)
+      {
+        gchar *key = g_strdup_printf("plugins/darkroom/%d/%s_visible", layout, not_in_develop[i]);
+        dt_conf_set_bool(key, FALSE);
+        g_free(key);
+      }
+    // no filter / sort bar above the photo (preferences: darktable menu)
+    dt_conf_set_bool("darkroom/ui/0/toolbar_top_visible", FALSE);
+    dt_conf_set_bool("darkroom/ui/1/toolbar_top_visible", FALSE);
+    // a classic RGB histogram, with the camera settings below it
+    dt_conf_set_string("plugins/darkroom/histogram/mode", "histogram");
+    dt_conf_set_string("plugins/darkroom/histogram/histogram", "linear");
+    dt_conf_set_string("plugins/darkroom/image_infos_position", "hidden");
+    // Lightroom-like panel widths, unless they were already adjusted
+    if(!dt_conf_key_exists("darkroom/ui/0/right_size"))
+      dt_conf_set_int("darkroom/ui/0/right_size", 300);
+    if(!dt_conf_key_exists("darkroom/ui/0/left_size"))
+      dt_conf_set_int("darkroom/ui/0/left_size", 240);
+    // HSL / Color shows its sliders, like Lightroom
+    dt_conf_set_bool("plugins/darkroom/colorequal/show_sliders", TRUE);
+    dt_conf_set_int("plugins/darkroom/lightroom_ui_version", 2);
+  }
+
   if(has_workspace)
   {
     // restore dbname & label (as set in call dt_workspace_create) to

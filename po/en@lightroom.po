@@ -35725,6 +35725,13 @@ msgstr "Mouse actions"
 #~ msgid "gpx file"
 #~ msgstr "GPX file"
 
+msgctxt "modulename"
+msgid "texture"
+msgstr "Texture"
+
+msgid "texture"
+msgstr "Texture"
+
 msgctxt "modulegroup"
 msgid "Develop"
 msgstr "Develop"

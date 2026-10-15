@@ -136,6 +136,7 @@ const dt_iop_order_entry_t legacy_order[] = {
   { {39.0f }, "globaltonemap", 0},
   { {40.0f }, "shadhi", 0},
   { {41.0f }, "atrous", 0},
+  { {41.5f }, "texture", 0},
   { {42.0f }, "bilat", 0},
   { {43.0f }, "colorzones", 0},
   { {44.0f }, "lowlight", 0},
@@ -266,6 +267,7 @@ const dt_iop_order_entry_t v30_order[] = {
   { {51.0f }, "zonesystem", 0},      // same
   { {52.0f }, "globaltonemap", 0},   // same
   { {53.0f }, "relight", 0},         // flatten local contrast while pretending do add lightness
+  { {53.5f }, "texture", 0},         // medium-sized details (Lightroom Texture)
   { {54.0f }, "bilat", 0},           // improve clarity/local contrast after all the bad things we have done
                                   //    to it with tonemapping
   { {55.0f }, "colorcorrection", 0}, // now that the colours have been damaged by contrast manipulations,
@@ -385,6 +387,7 @@ const dt_iop_order_entry_t v50_order[] = {
   { {51.0f }, "zonesystem", 0},      // same
   { {52.0f }, "globaltonemap", 0},   // same
   { {53.0f }, "relight", 0},         // flatten local contrast while pretending do add lightness
+  { {53.5f }, "texture", 0},         // medium-sized details (Lightroom Texture)
   { {54.0f }, "bilat", 0},           // improve clarity/local contrast after all the bad things we have done
                                   //    to it with tonemapping
   { {55.0f }, "colorcorrection", 0}, // now that the colours have been damaged by contrast manipulations,
@@ -505,6 +508,7 @@ const dt_iop_order_entry_t v30_jpg_order[] = {
   { { 51.0f }, "zonesystem", 0 },    // same
   { { 52.0f }, "globaltonemap", 0 }, // same
   { { 53.0f }, "relight", 0 },       // flatten local contrast while pretending do add lightness
+  { { 53.5f }, "texture", 0 },       // medium-sized details (Lightroom Texture)
   { { 54.0f }, "bilat", 0 },         // improve clarity/local contrast after all the bad things we have done
                                      //    to it with tonemapping
   { { 55.0f }, "colorcorrection", 0 },  // now that the colours have been damaged by contrast manipulations,
@@ -627,6 +631,7 @@ const dt_iop_order_entry_t v50_jpg_order[] = {
   { { 51.0f }, "zonesystem", 0 },    // same
   { { 52.0f }, "globaltonemap", 0 }, // same
   { { 53.0f }, "relight", 0 },       // flatten local contrast while pretending do add lightness
+  { { 53.5f }, "texture", 0 },       // medium-sized details (Lightroom Texture)
   { { 54.0f }, "bilat", 0 },         // improve clarity/local contrast after all the bad things we have done
                                      //    to it with tonemapping
   { { 55.0f }, "colorcorrection", 0 },  // now that the colours have been damaged by contrast manipulations,
@@ -738,6 +743,7 @@ void dt_ioppr_migrate_legacy_iop_order_list(GList *iop_order_list)
   _insert_before(iop_order_list, "colorbalancergb", "colorequal");
   _insert_before(iop_order_list, "highlights", "rasterfile");
   _insert_before(iop_order_list, "colorbalance", "colorharmonizer");
+  _insert_before(iop_order_list, "bilat", "texture");
 }
 
 static dt_iop_order_t _ioppr_get_default_iop_order_version(const dt_imgid_t imgid)

@@ -455,7 +455,10 @@ void gui_init(dt_iop_module_t *self)
                                dt_conf_get_bool("plugins/darkroom/lightroom_ui") ? 0 : 100);
   dt_bauhaus_slider_set_format(g->detail, "%");
   if(dt_conf_get_bool("plugins/darkroom/lightroom_ui"))
+  {
     dt_bauhaus_slider_set_soft_range(g->detail, -1.0f, 1.0f); // -100..+100, 0 centred
+    dt_bauhaus_slider_set_format(g->detail, ""); // whole numbers, no unit
+  }
   gtk_widget_set_tooltip_text(g->detail, _("changes the local contrast"));
 
   ++darktable.bauhaus->skip_accel;

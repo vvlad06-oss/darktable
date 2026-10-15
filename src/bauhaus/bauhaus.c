@@ -3361,6 +3361,11 @@ char *dt_bauhaus_slider_get_text(GtkWidget *w,
                                  const float val)
 {
   const dt_bauhaus_slider_data_t *d = &DT_BAUHAUS_WIDGET(w)->slider;
+  const float shown = val * d->factor + d->offset;
+  // Lightroom prints a neutral value without sign: "0", "0.00"
+  if(darktable.bauhaus->lr_layout
+     && fabsf(shown) < 0.5f * powf(10.0f, -d->digits))
+    return g_strdup_printf("%.*f%s", d->digits, 0.0f, d->format);
   if((d->hard_max * d->factor + d->offset)*(d->hard_min * d->factor + d->offset) < 0)
     return g_strdup_printf("%+.*f%s", d->digits, val * d->factor + d->offset, d->format);
   else

@@ -152,6 +152,7 @@ typedef struct dt_scopes_t
   GtkWidget *button_box_rgb;                    // GtkBox -- RGB channels buttons
   GtkWidget *channel_buttons[DT_SCOPES_RGB_N];  // Array of GtkToggleButton -- RGB channels
   GtkWidget *scope_draw;                        // GtkDrawingArea -- scope & resize
+  GtkWidget *lr_info;                           // GtkLabel -- Lightroom EXIF line below the scope
   // for access to data during process/draw
   dt_pthread_mutex_t lock;
 } dt_scopes_t;

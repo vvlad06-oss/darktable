@@ -685,6 +685,53 @@ static gboolean _overlay_get_child_position(GtkOverlay *overlay,
   return TRUE;
 }
 
+// Lightroom: the camera settings of the photo, below the histogram
+static void _lr_info_update(gpointer instance, dt_lib_module_t *self)
+{
+  dt_scopes_t *s = self->data;
+  if(!s || !s->lr_info) return;
+
+  const dt_image_t *img = &darktable.develop->image_storage;
+  if(dt_view_get_current() != DT_VIEW_DARKROOM || !dt_is_valid_imgid(img->id))
+  {
+    gtk_widget_hide(s->lr_info);
+    return;
+  }
+
+  GString *str = g_string_new(NULL);
+  const char *sep = "  ";
+  if(img->exif_iso > 0.0f)
+    g_string_append_printf(str, "ISO %.0f", img->exif_iso);
+  if(img->exif_focal_length > 0.0f)
+    g_string_append_printf(str, "%s%.0f mm", str->len ? sep : "", img->exif_focal_length);
+  if(img->exif_aperture > 0.0f)
+    g_string_append_printf(str, "%sf/%.1f", str->len ? sep : "", img->exif_aperture);
+  if(img->exif_exposure > 0.0f)
+  {
+    const float t = img->exif_exposure;
+    if(t >= 1.0f)
+      g_string_append_printf(str, "%s%.*f sec", str->len ? sep : "",
+                             nearbyintf(t) == t ? 0 : 1, t);
+    else
+      g_string_append_printf(str, "%s1/%.0f sec", str->len ? sep : "", 1.0f / t);
+  }
+
+  gtk_label_set_text(GTK_LABEL(s->lr_info), str->str);
+  gtk_widget_set_visible(s->lr_info, str->len > 0);
+  g_string_free(str, TRUE);
+}
+
+static void _lr_info_view_changed(gpointer instance,
+                                  dt_view_t *old_view,
+                                  dt_view_t *new_view,
+                                  dt_lib_module_t *self)
+{
+  dt_scopes_t *s = self->data;
+  // shown again once the darkroom has loaded its image
+  if(s && s->lr_info && !(new_view && new_view->view(new_view) == DT_VIEW_DARKROOM))
+    gtk_widget_hide(s->lr_info);
+}
+
 void gui_init(dt_lib_module_t *self)
 {
   /* initialize ui widgets */
@@ -887,7 +934,19 @@ void gui_init(dt_lib_module_t *self)
   // moves over the buttons.
   GtkWidget *eventbox = gtk_event_box_new();
   gtk_container_add(GTK_CONTAINER(eventbox), s->overlay);
-  self->widget = eventbox;
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui"))
+  {
+    s->lr_info = gtk_label_new("");
+    gtk_widget_set_name(s->lr_info, "lr-histogram-info");
+    gtk_label_set_ellipsize(GTK_LABEL(s->lr_info), PANGO_ELLIPSIZE_END);
+    gtk_widget_set_no_show_all(s->lr_info, TRUE);
+    self->widget = dt_gui_vbox(eventbox, s->lr_info);
+    DT_CONTROL_SIGNAL_HANDLE(DT_SIGNAL_DEVELOP_IMAGE_CHANGED, _lr_info_update);
+    DT_CONTROL_SIGNAL_HANDLE(DT_SIGNAL_DEVELOP_INITIALIZE, _lr_info_update);
+    DT_CONTROL_SIGNAL_HANDLE(DT_SIGNAL_VIEWMANAGER_VIEW_CHANGED, _lr_info_view_changed);
+  }
+  else
+    self->widget = eventbox;
   gtk_widget_set_name(self->widget, "main-histogram");
 
   /* connect callbacks */

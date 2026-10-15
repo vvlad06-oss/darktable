@@ -282,6 +282,13 @@ void gui_init(dt_iop_module_t *self)
 
   g->strength = dt_bauhaus_slider_from_params(self, N_("strength"));
   gtk_widget_set_tooltip_text(g->strength, _("amount of haze reduction"));
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui"))
+  {
+    // Lightroom Dehaze: -100..+100
+    dt_bauhaus_slider_set_factor(g->strength, 100.0f);
+    dt_bauhaus_slider_set_digits(g->strength, 0);
+    dt_bauhaus_slider_set_format(g->strength, "");
+  }
 
   g->distance = dt_bauhaus_slider_from_params(self, N_("distance"));
   dt_bauhaus_slider_set_digits(g->distance, 3);

@@ -742,6 +742,23 @@ void gui_update(dt_iop_module_t *self)
   dt_bauhaus_combobox_set(g->spot_mode, 0);
 
   dt_gui_update_collapsible_section(&g->cs);
+
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui"))
+  {
+    // Lightroom shows Exposure and Blacks relative to the default
+    // rendering of the image (+0.7 EV for raws in the scene-referred
+    // workflow): 0 at the default, where a double-click also goes back
+    const dt_iop_exposure_params_t *d = self->default_params;
+    dt_bauhaus_slider_set_offset(g->exposure, -d->exposure);
+    dt_bauhaus_slider_set_default(g->exposure, d->exposure);
+    dt_bauhaus_slider_set_soft_range(g->exposure, d->exposure - 5.0f, d->exposure + 5.0f);
+    dt_bauhaus_slider_set(g->exposure, p->exposure);
+
+    dt_bauhaus_slider_set_offset(g->black, 2000.0f * d->black);
+    dt_bauhaus_slider_set_default(g->black, d->black);
+    dt_bauhaus_slider_set_soft_range(g->black, d->black - 0.05f, d->black + 0.05f);
+    dt_bauhaus_slider_set(g->black, p->black);
+  }
 }
 
 void init_global(dt_iop_module_so_t *self)
@@ -1214,6 +1231,13 @@ void gui_init(dt_iop_module_t *self)
   dt_bauhaus_slider_set_digits(g->exposure, 3);
   dt_bauhaus_slider_set_format(g->exposure, _(" EV"));
   dt_bauhaus_slider_set_soft_range(g->exposure, -3.0, 4.0);
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui"))
+  {
+    // Lightroom: "+0.70", no unit and no eyedropper on the slider
+    dt_bauhaus_slider_set_digits(g->exposure, 2);
+    dt_bauhaus_slider_set_format(g->exposure, "");
+    dt_bauhaus_widget_set_quad_visibility(g->exposure, FALSE);
+  }
   dt_bauhaus_widget_set_quad_tooltip(g->exposure, _("set the exposure adjustment using the selected area"));
   dt_shortcut_register(dt_action_widget(g->exposure), 0, 0, GDK_KEY_e, 0);
 
@@ -1260,6 +1284,13 @@ void gui_init(dt_iop_module_t *self)
        "by pushing RGB values into negatives."));
   dt_bauhaus_slider_set_digits(g->black, 4);
   dt_bauhaus_slider_set_soft_range(g->black, -0.1, 0.1);
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui"))
+  {
+    // Lightroom Blacks: -100..+100, deeper blacks to the left
+    dt_bauhaus_slider_set_factor(g->black, -2000.0f);
+    dt_bauhaus_slider_set_digits(g->black, 0);
+    dt_bauhaus_slider_set_format(g->black, "");
+  }
 
   dt_gui_new_collapsible_section
     (&g->cs,

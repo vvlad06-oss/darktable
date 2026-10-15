@@ -147,6 +147,7 @@ typedef struct dt_lib_modulegroups_t
   GList *basics;
   GtkWidget *vbox_basic;
   GtkWidget *mod_vbox_basic;
+  GtkWidget *lr_basic_arrow; // disclosure triangle of the Lightroom Basic panel
   gboolean lr_reordered; // modules are shown in Lightroom panel order
 
   dt_iop_module_t *force_show_module;
@@ -408,6 +409,7 @@ static void _basics_hide(dt_lib_module_t *self)
   }
   gtk_widget_destroy(d->vbox_basic);
   d->vbox_basic = NULL;
+  d->lr_basic_arrow = NULL;
 }
 
 static gboolean _basics_goto_module(GtkWidget *w, GdkEventButton *e, gpointer user_data)
@@ -958,6 +960,33 @@ static dt_iop_module_t *_basics_lr_module(const char *op)
   return NULL;
 }
 
+static void _basics_lr_toggle(dt_lib_module_t *self)
+{
+  dt_lib_modulegroups_t *d = self->data;
+  if(!d->mod_vbox_basic) return;
+  const gboolean collapse = gtk_widget_get_visible(d->mod_vbox_basic);
+  gtk_widget_set_visible(d->mod_vbox_basic, !collapse);
+  dt_conf_set_bool("plugins/darkroom/lightroom_basic_collapsed", collapse);
+  if(d->lr_basic_arrow)
+  {
+    dtgtk_button_set_paint(DTGTK_BUTTON(d->lr_basic_arrow), dtgtk_cairo_paint_solid_arrow,
+                           collapse ? CPF_DIRECTION_LEFT : CPF_DIRECTION_DOWN, NULL);
+    gtk_widget_queue_draw(d->lr_basic_arrow);
+  }
+}
+
+static gboolean _basics_lr_header_clicked(GtkWidget *w, GdkEventButton *e, dt_lib_module_t *self)
+{
+  if(e->button != GDK_BUTTON_PRIMARY || e->type != GDK_BUTTON_PRESS) return FALSE;
+  _basics_lr_toggle(self);
+  return TRUE;
+}
+
+static void _basics_lr_arrow_clicked(GtkWidget *w, dt_lib_module_t *self)
+{
+  _basics_lr_toggle(self);
+}
+
 // Lightroom Classic "Basic" panel: the quick access widgets, in the order
 // of the preset, under section titles, with Lightroom names.
 static void _basics_show_lr(dt_lib_module_t *self)
@@ -972,19 +1001,29 @@ static void _basics_show_lr(dt_lib_module_t *self)
   gtk_widget_set_name(title, "basics-lr-title");
   gtk_label_set_xalign(GTK_LABEL(title), 1.0);
   gtk_box_pack_start(GTK_BOX(header), title, TRUE, TRUE, 0);
-  GtkWidget *arrow = dtgtk_button_new(dtgtk_cairo_paint_solid_arrow, CPF_DIRECTION_DOWN, NULL);
+  const gboolean collapsed = dt_conf_get_bool("plugins/darkroom/lightroom_basic_collapsed");
+  GtkWidget *arrow = dtgtk_button_new(dtgtk_cairo_paint_solid_arrow,
+                                      collapsed ? CPF_DIRECTION_LEFT : CPF_DIRECTION_DOWN, NULL);
   gtk_widget_set_name(arrow, "basics-lr-arrow");
   gtk_widget_set_can_focus(arrow, FALSE);
   dt_gui_add_class(arrow, "dt_transparent_background");
   gtk_box_pack_start(GTK_BOX(header), arrow, FALSE, FALSE, 0);
-  gtk_box_pack_start(GTK_BOX(d->vbox_basic), header, FALSE, FALSE, 0);
-  gtk_widget_show_all(header);
+
+  // a click on the header folds or unfolds the panel, as in Lightroom
+  GtkWidget *header_evb = gtk_event_box_new();
+  gtk_container_add(GTK_CONTAINER(header_evb), header);
+  g_signal_connect(header_evb, "button-press-event", G_CALLBACK(_basics_lr_header_clicked), self);
+  g_signal_connect(arrow, "clicked", G_CALLBACK(_basics_lr_arrow_clicked), self);
+  d->lr_basic_arrow = arrow;
+  gtk_box_pack_start(GTK_BOX(d->vbox_basic), header_evb, FALSE, FALSE, 0);
+  gtk_widget_show_all(header_evb);
 
   d->mod_vbox_basic = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
   gtk_widget_set_name(d->mod_vbox_basic, "basics-lr-body");
   dt_gui_add_class(d->mod_vbox_basic, "dt_plugin_ui_main");
   gtk_box_pack_start(GTK_BOX(d->vbox_basic), d->mod_vbox_basic, FALSE, FALSE, 0);
-  gtk_widget_show(d->mod_vbox_basic);
+  gtk_widget_set_no_show_all(d->mod_vbox_basic, TRUE);
+  gtk_widget_set_visible(d->mod_vbox_basic, !collapsed);
 
   for(const GList *l = d->basics; l; l = g_list_next(l))
   {
@@ -2160,25 +2199,22 @@ void init_presets(dt_lib_module_t *self)
   // followed by the other panels in Lightroom order (first group)
   g_free(tx);
   tx = g_strdup("1|0ꬹ1||");
-  // white balance
-  AM("channelmixerrgb/illuminant=WB");
-  AM("channelmixerrgb/temperature=Temp");
-  AM("channelmixerrgb/hue=Tint");
+  // treatment and white balance (Lightroom controls of color calibration)
+  AM("channelmixerrgb/lightroom/treatment=Treatment");
+  AM("channelmixerrgb/lightroom/white balance=WB");
+  AM("channelmixerrgb/lightroom/temp=Temp");
+  AM("channelmixerrgb/lightroom/tint=Tint");
   // tone
   AM("#Tone");
   AM("exposure/exposure=Exposure");
-  if(wf_filmic)
-    AM("filmicrgb/contrast=Contrast");
-  else if(wf_agx)
-    AM("agx/curve/contrast=Contrast");
-  else
-    AM("sigmoid/contrast=Contrast");
+  AM("colorbalancergb/contrast=Contrast"); // 0 = neutral, like Lightroom
   AM("shadhi/highlights=Highlights");
   AM("shadhi/shadows=Shadows");
   AM("colorbalancergb/gain/luminance=Whites");
   AM("exposure/black level correction=Blacks");
   // presence
   AM("#Presence");
+  AM("texture/texture=Texture");
   AM("bilat/detail=Clarity");
   AM("hazeremoval/strength=Dehaze");
   AM("colorbalancergb/global vibrance=Vibrance");
@@ -2206,6 +2242,7 @@ void init_presets(dt_lib_module_t *self)
   else AM("sigmoid");
   AM("toneequal");
   AM("shadhi");
+  AM("texture");
   AM("bilat");
   AM("hazeremoval");
   AM("highlights");
@@ -3594,6 +3631,15 @@ static void _buttons_update(dt_lib_module_t *self)
     gr->button = bt;
     gtk_box_pack_start(GTK_BOX(d->hbox_groups), bt, TRUE, TRUE, 0);
     gtk_widget_show(bt);
+  }
+
+  // Lightroom has a single column of panels: no group tabs and no
+  // search box (the "search modules" shortcut still brings it up)
+  if(_lightroom_ui() && d->basics_show)
+  {
+    d->current = DT_MODULEGROUP_BASICS;
+    gtk_widget_hide(d->hbox_buttons);
+    gtk_widget_hide(d->hbox_search_box);
   }
 
   // last, if d->current still valid, we select it otherwise the first one

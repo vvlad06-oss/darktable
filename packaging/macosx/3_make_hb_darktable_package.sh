@@ -300,9 +300,16 @@ glib-compile-schemas "$dtResourcesDir"/share/glib-2.0/schemas/
 
 # Define gtk-query-immodules-3.0
 immodulesCacheFile="$dtResourcesDir"/lib/gtk-3.0/3.0.0/immodules.cache
-gtkVersion=$(pkg-config --modversion gtk+-3.0)
-sed -i '' "s#$homebrewHome/Cellar/gtk+3/$gtkVersion/lib/gtk-3.0/3.0.0/immodules#@executable_path/../Resources/lib/gtk-3.0/3.0.0/immodules#g" "$immodulesCacheFile"
-sed -i '' "s#$homebrewHome/Cellar/gtk+3/$gtkVersion/share/locale#@executable_path/../Resources/share/locale#g" "$immodulesCacheFile"
+# the real keg path: it carries the formula revision (e.g. 3.24.52_1), which
+# pkg-config --modversion does not. A cache left pointing to the Homebrew keg
+# makes the app load a second GTK on Macs that have Homebrew's gtk+3.
+gtkKeg=$(cd "$(brew --prefix gtk+3)" && pwd -P)
+sed -i '' "s#$gtkKeg/lib/gtk-3.0/3.0.0/immodules#@executable_path/../Resources/lib/gtk-3.0/3.0.0/immodules#g" "$immodulesCacheFile"
+sed -i '' "s#$gtkKeg/share/locale#@executable_path/../Resources/share/locale#g" "$immodulesCacheFile"
+if grep -v "^#" "$immodulesCacheFile" | grep -q "$homebrewHome"; then
+    echo "Error: $immodulesCacheFile still points to Homebrew" >&2
+    exit 1
+fi
 # Rename and move it to the right place
 mv "$immodulesCacheFile" "$dtResourcesDir"/etc/gtk-3.0/gtk.immodules
 

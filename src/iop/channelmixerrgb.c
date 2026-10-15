@@ -148,6 +148,8 @@ typedef struct dt_iop_channelmixer_rgb_gui_data_t
   GtkWidget *scale_grey_R, *scale_grey_G, *scale_grey_B;
   GtkWidget *normalize_R, *normalize_G, *normalize_B, *normalize_sat, *normalize_light, *normalize_grey;
   GtkWidget *color_picker;
+  GtkWidget *lr_treatment, *lr_wb, *lr_temp, *lr_tint; // Lightroom Basic panel
+  gboolean lr_moving;                                   // Temp or Tint is being moved
   float xy[2];
   float XYZ[4];
 
@@ -1212,6 +1214,7 @@ static void _declare_cat_on_pipe(dt_iop_module_t *self, const gboolean preset)
 static void _update_illuminants(const dt_iop_module_t *self);
 static void _update_approx_cct(const dt_iop_module_t *self);
 static void _update_illuminant_color(const dt_iop_module_t *self);
+static void _lr_update(dt_iop_module_t *self);
 
 static void _check_if_close_to_daylight(const float x,
                                         const float y,
@@ -3739,6 +3742,7 @@ static void _illum_xy_callback(GtkWidget *slider,
   dt_bauhaus_slider_set(g->temperature, p->temperature);
   _update_approx_cct(self);
   _update_illuminant_color(self);
+  _lr_update(self);
   DT_LEAVE_GUI_UPDATE();
 
   dt_dev_add_history_item(darktable.develop, self, TRUE);
@@ -4150,6 +4154,8 @@ void gui_changed(dt_iop_module_t *self,
 
   _declare_cat_on_pipe(self, FALSE);
 
+  _lr_update(self);
+
   DT_LEAVE_GUI_UPDATE();
 }
 
@@ -4404,6 +4410,7 @@ static void _auto_set_illuminant(dt_iop_module_t *self,
     _update_illuminant_color(self);
     _paint_hue(self);
     gtk_widget_queue_draw(g->origin_spot);
+    _lr_update(self);
 
     DT_LEAVE_GUI_UPDATE();
 
@@ -4418,6 +4425,362 @@ void color_picker_apply(dt_iop_module_t *self,
 {
   DT_GUARD_GUI_UPDATE();
   _auto_set_illuminant(self, pipe);
+}
+
+/* ---------------------------------------------------------------------------
+   Lightroom Classic Basic panel: Treatment, WB presets, Temp and Tint.
+
+   Temp is the correlated color temperature of the scene illuminant and Tint
+   its distance to the Planckian locus in CIE 1960 uv, with Adobe's scale
+   (3000 per uv unit): a positive Tint is a greener light, corrected towards
+   magenta. Both drive the custom illuminant of the CAT, so the processing
+   stays the one of color calibration.
+   ------------------------------------------------------------------------- */
+
+#define LR_TINT_SCALE 3000.0f
+#define LR_TEMP_MIN 2000.0f
+#define LR_TEMP_MAX 25000.0f
+
+typedef enum dt_lr_wb_preset_t
+{
+  LR_WB_AS_SHOT = 0,
+  LR_WB_DAYLIGHT,
+  LR_WB_CLOUDY,
+  LR_WB_SHADE,
+  LR_WB_TUNGSTEN,
+  LR_WB_FLUORESCENT,
+  LR_WB_FLASH,
+  LR_WB_CUSTOM,
+} dt_lr_wb_preset_t;
+
+// Lightroom white balance presets: temperature, tint
+static const float _lr_wb_presets[LR_WB_CUSTOM][2] =
+{
+  { 0.0f, 0.0f },    // as shot, from the image
+  { 5500.0f, 10.0f },
+  { 6500.0f, 10.0f },
+  { 7500.0f, 10.0f },
+  { 2850.0f, 0.0f },
+  { 3800.0f, 21.0f },
+  { 5500.0f, 0.0f },
+};
+
+static inline void _lr_xy_to_uv(const float x, const float y, float *u, float *v)
+{
+  const float d = -2.0f * x + 12.0f * y + 3.0f;
+  *u = 4.0f * x / d;
+  *v = 6.0f * y / d;
+}
+
+static inline void _lr_uv_to_xy(const float u, const float v, float *x, float *y)
+{
+  const float d = 2.0f * u - 8.0f * v + 4.0f;
+  *x = 3.0f * u / d;
+  *y = 2.0f * v / d;
+}
+
+// point of the Planckian locus at temperature t, in uv, with its unit
+// normal pointing to the green side of the locus
+static void _lr_locus(const float t, float *u, float *v, float *nu, float *nv)
+{
+  const float T = CLAMPF(t, 1667.0f, 25000.0f);
+  float x, y;
+  CCT_to_xy_blackbody(T, &x, &y);
+  _lr_xy_to_uv(x, y, u, v);
+
+  // tangent from half a mired on each side
+  const float m = 1e6f / T;
+  float xa, ya, xb, yb, ua, va, ub, vb;
+  CCT_to_xy_blackbody(CLAMPF(1e6f / (m + 0.5f), 1667.0f, 25000.0f), &xa, &ya);
+  CCT_to_xy_blackbody(CLAMPF(1e6f / (m - 0.5f), 1667.0f, 25000.0f), &xb, &yb);
+  _lr_xy_to_uv(xa, ya, &ua, &va);
+  _lr_xy_to_uv(xb, yb, &ub, &vb);
+  float du = ub - ua, dv = vb - va;
+  const float n = sqrtf(du * du + dv * dv);
+  if(n < 1e-9f)
+  {
+    *nu = 0.0f;
+    *nv = 1.0f;
+    return;
+  }
+  du /= n;
+  dv /= n;
+  // the normal on the green side has a positive v
+  *nu = dv > 0.0f ? -dv : dv;
+  *nv = dv > 0.0f ? du : -du;
+  if(*nv < 0.0f)
+  {
+    *nu = -*nu;
+    *nv = -*nv;
+  }
+}
+
+static void _lr_temp_tint_to_xy(const float temp, const float tint, float *x, float *y)
+{
+  float u, v, nu, nv;
+  _lr_locus(temp, &u, &v, &nu, &nv);
+  const float o = tint / LR_TINT_SCALE;
+  _lr_uv_to_xy(u + o * nu, v + o * nv, x, y);
+}
+
+static void _lr_xy_to_temp_tint(const float x, const float y, float *temp, float *tint)
+{
+  float u, v;
+  _lr_xy_to_uv(x, y, &u, &v);
+
+  // closest point of the locus: golden section search over the mireds
+  float a = 1e6f / 25000.0f, b = 1e6f / 1667.0f;
+  const float gr = 0.61803399f;
+  float lu, lv, nu, nv;
+#define LR_DIST(mired) (_lr_locus(1e6f / (mired), &lu, &lv, &nu, &nv), \
+                        (u - lu) * (u - lu) + (v - lv) * (v - lv))
+  float c = b - gr * (b - a), d = a + gr * (b - a);
+  float fc = LR_DIST(c), fd = LR_DIST(d);
+  for(int i = 0; i < 48; i++)
+  {
+    if(fc < fd)
+    {
+      b = d;
+      d = c;
+      fd = fc;
+      c = b - gr * (b - a);
+      fc = LR_DIST(c);
+    }
+    else
+    {
+      a = c;
+      c = d;
+      fc = fd;
+      d = a + gr * (b - a);
+      fd = LR_DIST(d);
+    }
+  }
+#undef LR_DIST
+  const float T = 1e6f / (0.5f * (a + b));
+  _lr_locus(T, &lu, &lv, &nu, &nv);
+  *temp = T;
+  *tint = ((u - lu) * nu + (v - lv) * nv) * LR_TINT_SCALE;
+}
+
+// chromaticity of the illuminant described by a set of parameters
+static void _lr_params_xy(const dt_iop_module_t *self,
+                          const dt_iop_channelmixer_rgb_params_t *p,
+                          float *x,
+                          float *y)
+{
+  *x = p->x;
+  *y = p->y;
+  dt_aligned_pixel_t custom_wb;
+  _get_white_balance_coeff(self, custom_wb);
+  illuminant_to_xy(p->illuminant, &(self->dev->image_storage),
+                   custom_wb, x, y, p->temperature, p->illum_fluo, p->illum_led);
+}
+
+static void _lr_update(dt_iop_module_t *self)
+{
+  dt_iop_channelmixer_rgb_gui_data_t *g = self->gui_data;
+  if(!g || !g->lr_temp) return;
+  const dt_iop_channelmixer_rgb_params_t *p = self->params;
+  const dt_iop_channelmixer_rgb_params_t *d = self->default_params;
+
+  float x, y, dx, dy, temp = 5000.0f, tint = 0.0f;
+  _lr_params_xy(self, p, &x, &y);
+  if(x > 0.0f && y > 0.0f && x < 1.0f && y < 1.0f)
+    _lr_xy_to_temp_tint(x, y, &temp, &tint);
+  _lr_params_xy(self, d, &dx, &dy);
+
+  int preset = LR_WB_CUSTOM;
+  if(fabsf(x - dx) < 1e-4f && fabsf(y - dy) < 1e-4f)
+    preset = LR_WB_AS_SHOT;
+  else
+  {
+    for(int k = LR_WB_DAYLIGHT; k < LR_WB_CUSTOM; k++)
+      if(fabsf(temp - _lr_wb_presets[k][0]) < 0.002f * _lr_wb_presets[k][0]
+         && fabsf(tint - _lr_wb_presets[k][1]) < 0.5f)
+      {
+        preset = k;
+        break;
+      }
+  }
+
+  // double-click on Temp or Tint goes back to the white balance as shot
+  float dtemp = 5500.0f, dtint = 0.0f;
+  if(dx > 0.0f && dy > 0.0f && dx < 1.0f && dy < 1.0f)
+    _lr_xy_to_temp_tint(dx, dy, &dtemp, &dtint);
+
+  DT_ENTER_GUI_UPDATE();
+  dt_bauhaus_slider_set_default(g->lr_temp, CLAMPF(dtemp, LR_TEMP_MIN, LR_TEMP_MAX));
+  dt_bauhaus_slider_set_default(g->lr_tint, CLAMPF(dtint, -150.0f, 150.0f));
+  dt_bauhaus_combobox_set(g->lr_wb, preset);
+  if(!g->lr_moving)
+  {
+    dt_bauhaus_slider_set(g->lr_temp, temp);
+    dt_bauhaus_slider_set(g->lr_tint, tint);
+  }
+  const gboolean bw = p->grey[0] != 0.0f || p->grey[1] != 0.0f || p->grey[2] != 0.0f;
+  dt_bauhaus_combobox_set(g->lr_treatment, bw ? 1 : 0);
+  DT_LEAVE_GUI_UPDATE();
+}
+
+// set a custom illuminant, as the Lightroom sliders and presets do
+static void _lr_set_xy(dt_iop_module_t *self, const float x, const float y)
+{
+  dt_iop_channelmixer_rgb_params_t *p = self->params;
+  dt_iop_channelmixer_rgb_gui_data_t *g = self->gui_data;
+
+  p->x = x;
+  p->y = y;
+  p->illuminant = DT_ILLUMINANT_CUSTOM;
+  if(p->adaptation == DT_ADAPTATION_RGB || p->adaptation == DT_ADAPTATION_LAST)
+    p->adaptation = DT_ADAPTATION_CAT16;
+
+  DT_ENTER_GUI_UPDATE();
+  dt_bauhaus_combobox_set_from_value(g->illuminant, p->illuminant);
+  dt_bauhaus_combobox_set_from_value(g->adaptation, p->adaptation);
+  DT_LEAVE_GUI_UPDATE();
+
+  gui_changed(self, g->illuminant, NULL);
+  dt_dev_add_history_item(darktable.develop, self, TRUE);
+}
+
+static void _lr_temp_tint_callback(GtkWidget *slider, dt_iop_module_t *self)
+{
+  DT_GUARD_GUI_UPDATE();
+  dt_iop_channelmixer_rgb_gui_data_t *g = self->gui_data;
+  float x, y;
+  _lr_temp_tint_to_xy(dt_bauhaus_slider_get(g->lr_temp),
+                      dt_bauhaus_slider_get(g->lr_tint), &x, &y);
+  g->lr_moving = TRUE;
+  _lr_set_xy(self, x, y);
+  g->lr_moving = FALSE;
+}
+
+static void _lr_wb_callback(GtkWidget *combo, dt_iop_module_t *self)
+{
+  DT_GUARD_GUI_UPDATE();
+  dt_iop_channelmixer_rgb_gui_data_t *g = self->gui_data;
+  dt_iop_channelmixer_rgb_params_t *p = self->params;
+  const int preset = dt_bauhaus_combobox_get(combo);
+
+  if(preset == LR_WB_AS_SHOT)
+  {
+    // back to the illuminant of the default parameters (from the image)
+    const dt_iop_channelmixer_rgb_params_t *d = self->default_params;
+    p->illuminant = d->illuminant;
+    p->x = d->x;
+    p->y = d->y;
+    p->temperature = d->temperature;
+    p->illum_fluo = d->illum_fluo;
+    p->illum_led = d->illum_led;
+    p->adaptation = d->adaptation;
+
+    DT_ENTER_GUI_UPDATE();
+    dt_bauhaus_combobox_set_from_value(g->illuminant, p->illuminant);
+    dt_bauhaus_combobox_set_from_value(g->adaptation, p->adaptation);
+    dt_bauhaus_combobox_set_from_value(g->illum_fluo, p->illum_fluo);
+    dt_bauhaus_combobox_set_from_value(g->illum_led, p->illum_led);
+    DT_LEAVE_GUI_UPDATE();
+
+    gui_changed(self, g->illuminant, NULL);
+    dt_dev_add_history_item(darktable.develop, self, TRUE);
+  }
+  else if(preset > LR_WB_AS_SHOT && preset < LR_WB_CUSTOM)
+  {
+    float x, y;
+    _lr_temp_tint_to_xy(_lr_wb_presets[preset][0], _lr_wb_presets[preset][1], &x, &y);
+    _lr_set_xy(self, x, y);
+  }
+  // "Custom" keeps the current white balance
+}
+
+static void _lr_treatment_callback(GtkWidget *combo, dt_iop_module_t *self)
+{
+  DT_GUARD_GUI_UPDATE();
+  dt_iop_channelmixer_rgb_gui_data_t *g = self->gui_data;
+  dt_iop_channelmixer_rgb_params_t *p = self->params;
+
+  // black & white: the luminance-based gray of the module
+  const gboolean bw = dt_bauhaus_combobox_get(combo) == 1;
+  p->grey[0] = 0.0f;
+  p->grey[1] = bw ? 1.0f : 0.0f;
+  p->grey[2] = 0.0f;
+  p->normalize_grey = TRUE;
+
+  DT_ENTER_GUI_UPDATE();
+  dt_bauhaus_slider_set(g->scale_grey_R, p->grey[0]);
+  dt_bauhaus_slider_set(g->scale_grey_G, p->grey[1]);
+  dt_bauhaus_slider_set(g->scale_grey_B, p->grey[2]);
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(g->normalize_grey), p->normalize_grey);
+  DT_LEAVE_GUI_UPDATE();
+
+  dt_dev_add_history_item(darktable.develop, self, TRUE);
+}
+
+// logarithmic temperature scale over the soft range, 2000 K to 12000 K
+static float _lr_curve_temp(const float inval, const dt_bauhaus_curve_t dir)
+{
+  const float r = 12000.0f / LR_TEMP_MIN - 1.0f;
+  if(dir == DT_BAUHAUS_SET)
+    return logf(1.0f + MAX(inval, 0.0f) * r) / logf(1.0f + r);
+  else
+    return (expf(inval * logf(1.0f + r)) - 1.0f) / r;
+}
+
+static void _lr_paint_tint_background(GtkWidget *slider)
+{
+  dt_bauhaus_slider_clear_stops(slider);
+  dt_bauhaus_slider_set_stop(slider, 0.0f, 0.30f, 0.62f, 0.24f); // green
+  dt_bauhaus_slider_set_stop(slider, 0.5f, 0.55f, 0.55f, 0.55f);
+  dt_bauhaus_slider_set_stop(slider, 1.0f, 0.70f, 0.28f, 0.66f); // magenta
+}
+
+static void _lr_paint_temp_background(GtkWidget *slider)
+{
+  dt_bauhaus_slider_clear_stops(slider);
+  dt_bauhaus_slider_set_stop(slider, 0.0f, 0.24f, 0.42f, 0.80f); // blue
+  dt_bauhaus_slider_set_stop(slider, 0.5f, 0.55f, 0.55f, 0.55f);
+  dt_bauhaus_slider_set_stop(slider, 1.0f, 0.86f, 0.74f, 0.25f); // yellow
+}
+
+static void _lr_gui_init(dt_iop_module_t *self)
+{
+  dt_iop_channelmixer_rgb_gui_data_t *g = self->gui_data;
+
+  DT_BAUHAUS_COMBOBOX_NEW_FULL(g->lr_treatment, self, N_("lightroom"), N_("treatment"),
+                               _("color or black & white rendering"),
+                               0, _lr_treatment_callback, self,
+                               N_("Color"), N_("Black & White"));
+
+  DT_BAUHAUS_COMBOBOX_NEW_FULL(g->lr_wb, self, N_("lightroom"), N_("white balance"),
+                               _("white balance preset"),
+                               0, _lr_wb_callback, self,
+                               N_("As Shot"), N_("Daylight"), N_("Cloudy"), N_("Shade"),
+                               N_("Tungsten"), N_("Fluorescent"), N_("Flash"), N_("Custom"));
+
+  g->lr_temp = dt_bauhaus_slider_new_with_range(self, LR_TEMP_MIN, LR_TEMP_MAX, 0, 5500.0f, 0);
+  dt_bauhaus_widget_set_label(g->lr_temp, N_("lightroom"), N_("temp"));
+  dt_bauhaus_slider_set_soft_range(g->lr_temp, LR_TEMP_MIN, 12000.0f);
+  dt_bauhaus_slider_set_curve(g->lr_temp, _lr_curve_temp);
+  dt_bauhaus_slider_set_step(g->lr_temp, 50.0f);
+  dt_bauhaus_slider_set_format(g->lr_temp, "");
+  gtk_widget_set_tooltip_text(g->lr_temp,
+                              _("color temperature of the light in the scene\n"
+                                "higher values make the image warmer\n"
+                                "use the eyedropper on a neutral area to set it"));
+  _lr_paint_temp_background(g->lr_temp);
+  g_signal_connect(G_OBJECT(g->lr_temp), "value-changed",
+                   G_CALLBACK(_lr_temp_tint_callback), self);
+  dt_color_picker_new(self, DT_COLOR_PICKER_AREA, g->lr_temp);
+
+  g->lr_tint = dt_bauhaus_slider_new_with_range(self, -150.0f, 150.0f, 1.0f, 0.0f, 0);
+  dt_bauhaus_widget_set_label(g->lr_tint, N_("lightroom"), N_("tint"));
+  dt_bauhaus_slider_set_format(g->lr_tint, "");
+  gtk_widget_set_tooltip_text(g->lr_tint,
+                              _("green / magenta balance of the light\n"
+                                "positive values make the image more magenta"));
+  _lr_paint_tint_background(g->lr_tint);
+  g_signal_connect(G_OBJECT(g->lr_tint), "value-changed",
+                   G_CALLBACK(_lr_temp_tint_callback), self);
 }
 
 
@@ -4456,6 +4819,13 @@ void gui_init(dt_iop_module_t *self)
   // Page CAT
   self->widget = dt_ui_notebook_page(g->notebook, N_("CAT"),
                                      _("chromatic adaptation transform"));
+
+  // Lightroom Basic panel controls, shown there through the quick access
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui"))
+  {
+    _lr_gui_init(self);
+    dt_gui_box_add(self->widget, g->lr_treatment, g->lr_wb, g->lr_temp, g->lr_tint);
+  }
 
   g->adaptation = dt_bauhaus_combobox_from_params(self, N_("adaptation"));
   gtk_widget_set_tooltip_text
