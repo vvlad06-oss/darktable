@@ -25,6 +25,9 @@
 #include "control/conf.h"
 #include "control/control.h"
 #include "develop/develop.h"
+#include "develop/blend.h"
+#include "develop/imageop.h"
+#include "develop/masks.h"
 #include "dtgtk/button.h"
 #include "dtgtk/icon.h"
 #include "gui/accelerators.h"
@@ -561,7 +564,7 @@ static void _basics_add_widget(dt_lib_module_t *self, dt_lib_modulegroups_basic_
 
     // we put the temporary widget at the place of the real widget in the module
     // this avoid order mismatch when putting back the real widget
-    item->temp_widget = gtk_label_new("temp widget");
+    item->temp_widget = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0); // invisible placeholder
     if(GTK_IS_CONTAINER(item->old_parent))
     {
       if(GTK_IS_BOX(item->old_parent))
@@ -737,6 +740,166 @@ _basics_add_items_from_module_widget(dt_lib_module_t *self, dt_iop_module_t *mod
   return item_pos;
 }
 
+
+
+static gboolean _lightroom_ui(void);
+
+// a local adjustment (Lightroom mask): an extra instance with a mask, or one
+// just created from the Masking tool whose mask is still being drawn
+static gboolean _lr_is_local_adjustment(const dt_iop_module_t *module)
+{
+  return module->multi_priority > 0
+         && ((module->blend_params && module->blend_params->mask_mode != DEVELOP_MASK_DISABLED)
+             || (module->expander && g_object_get_data(G_OBJECT(module->expander), "lr-local")));
+}
+
+/* ---------------------------------------------------------------------------
+   Lightroom tool strip (below the histogram): Crop, Remove, Transform, Masking
+   ------------------------------------------------------------------------- */
+
+static void _lr_paint_crop(cairo_t *cr, gint x, gint y, gint w, gint h,
+                           gint flags, void *data)
+{
+  const double s = MIN(w, h);
+  cairo_save(cr);
+  cairo_translate(cr, x + (w - s) / 2.0, y + (h - s) / 2.0);
+  cairo_scale(cr, s, s);
+  cairo_set_line_width(cr, 0.08);
+  cairo_set_line_cap(cr, CAIRO_LINE_CAP_SQUARE);
+  // two interlocking L shapes
+  cairo_move_to(cr, 0.28, 0.05);
+  cairo_line_to(cr, 0.28, 0.72);
+  cairo_line_to(cr, 0.95, 0.72);
+  cairo_move_to(cr, 0.05, 0.28);
+  cairo_line_to(cr, 0.72, 0.28);
+  cairo_line_to(cr, 0.72, 0.95);
+  cairo_stroke(cr);
+  cairo_restore(cr);
+}
+
+static dt_iop_module_t *_basics_lr_module(const char *op);
+
+static void _lr_open_module(dt_iop_module_t *module)
+{
+  if(!module) return;
+  if(!module->expander || !gtk_widget_get_visible(module->expander))
+    dt_dev_modulegroups_switch(darktable.develop, module);
+  dt_iop_gui_set_expanded(module, TRUE, dt_conf_get_bool("darkroom/ui/single_module"));
+  if(!module->expanded) dt_iop_gui_set_expanded(module, TRUE, FALSE);
+  dt_iop_request_focus(module);
+}
+
+static void _lr_tool_clicked(GtkButton *button, gpointer user_data)
+{
+  _lr_open_module(_basics_lr_module((const char *)user_data));
+}
+
+// Lightroom local adjustment: a new exposure instance with a drawn mask,
+// the mask creation tool armed so that the user can draw it right away
+static void _lr_new_mask(GtkWidget *item, gpointer user_data)
+{
+  const int mask_type = GPOINTER_TO_INT(user_data);
+  dt_iop_module_t *base = _basics_lr_module("exposure");
+  if(!base) return;
+
+  dt_iop_module_t *module = dt_iop_gui_duplicate(base, FALSE);
+  if(!module) return;
+  if(module->expander) g_object_set_data(G_OBJECT(module->expander), "lr-local", GINT_TO_POINTER(1));
+
+  const char *kind = mask_type == DT_MASKS_BRUSH    ? _("Brush")
+                   : mask_type == DT_MASKS_GRADIENT ? _("Linear Gradient")
+                   : mask_type == DT_MASKS_ELLIPSE  ? _("Radial Gradient")
+                                                    : _("Object");
+  g_snprintf(module->multi_name, sizeof(module->multi_name), "%s %d", kind, module->multi_priority);
+  module->multi_name_hand_edited = TRUE;
+  dt_iop_gui_update_header(module);
+
+  // show the new local adjustment: in the Lightroom column, or in its group
+  if(_lightroom_ui()
+     && dt_dev_modulegroups_get_activated(darktable.develop) == DT_MODULEGROUP_BASICS)
+  {
+    dt_dev_modulegroups_update_visibility(darktable.develop);
+    dt_iop_gui_set_expanded(module, TRUE, dt_conf_get_bool("darkroom/ui/single_module"));
+    if(!module->expanded) dt_iop_gui_set_expanded(module, TRUE, FALSE);
+    dt_iop_request_focus(module);
+  }
+  else
+    _lr_open_module(module);
+
+  // press the matching shape button of the mask tools
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  if(!bd) return;
+  for(int n = 0; n < DEVELOP_MASKS_NB_SHAPES; n++)
+  {
+    if(bd->masks_type[n] == mask_type && bd->masks_shapes[n])
+    {
+      GdkEvent *event = gdk_event_new(GDK_BUTTON_PRESS);
+      event->button.button = GDK_BUTTON_PRIMARY;
+      event->button.state = 0;
+      event->button.window = g_object_ref(gtk_widget_get_window(dt_ui_main_window(darktable.gui->ui)));
+      gboolean ret = FALSE;
+      g_signal_emit_by_name(bd->masks_shapes[n], "button-press-event", event, &ret);
+      gdk_event_free(event);
+      break;
+    }
+  }
+
+}
+
+static void _lr_masking_clicked(GtkWidget *button, dt_lib_module_t *self)
+{
+  GtkWidget *menu = gtk_menu_new();
+  struct { const char *label; int type; } entries[] = {
+    { N_("Brush"), DT_MASKS_BRUSH },
+    { N_("Linear Gradient"), DT_MASKS_GRADIENT },
+    { N_("Radial Gradient"), DT_MASKS_ELLIPSE },
+#ifdef HAVE_AI
+    { N_("Select Object (AI)"), DT_MASKS_OBJECT },
+#endif
+  };
+  for(int i = 0; i < G_N_ELEMENTS(entries); i++)
+  {
+    GtkWidget *mi = gtk_menu_item_new_with_label(_(entries[i].label));
+    g_signal_connect(mi, "activate", G_CALLBACK(_lr_new_mask), GINT_TO_POINTER(entries[i].type));
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), mi);
+  }
+  gtk_widget_show_all(menu);
+  dt_gui_menu_popup(GTK_MENU(menu), button, GDK_GRAVITY_SOUTH_WEST, GDK_GRAVITY_NORTH_WEST);
+}
+
+static GtkWidget *_lr_toolstrip(dt_lib_module_t *self)
+{
+  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+  gtk_widget_set_name(box, "lr-toolstrip");
+
+  GtkWidget *bt = dtgtk_button_new(_lr_paint_crop, 0, NULL);
+  gtk_widget_set_tooltip_text(bt, _("Crop & Straighten (R)"));
+  g_signal_connect(bt, "clicked", G_CALLBACK(_lr_tool_clicked), (gpointer)"crop");
+  gtk_box_pack_start(GTK_BOX(box), bt, TRUE, TRUE, 0);
+
+  bt = dtgtk_button_new(dtgtk_cairo_paint_tool_heal, 0, NULL);
+  gtk_widget_set_tooltip_text(bt, _("Remove: spot healing and cloning (Q)"));
+  g_signal_connect(bt, "clicked", G_CALLBACK(_lr_tool_clicked), (gpointer)"retouch");
+  gtk_box_pack_start(GTK_BOX(box), bt, TRUE, TRUE, 0);
+
+  bt = dtgtk_button_new(dtgtk_cairo_paint_perspective, 1, NULL);
+  gtk_widget_set_tooltip_text(bt, _("Transform: upright and perspective"));
+  g_signal_connect(bt, "clicked", G_CALLBACK(_lr_tool_clicked), (gpointer)"ashift");
+  gtk_box_pack_start(GTK_BOX(box), bt, TRUE, TRUE, 0);
+
+  bt = dtgtk_button_new(dtgtk_cairo_paint_masks_drawn, 0, NULL);
+  gtk_widget_set_tooltip_text(bt, _("Masking: new local adjustment\n"
+                                    "(brush, linear or radial gradient)"));
+  g_signal_connect(bt, "clicked", G_CALLBACK(_lr_masking_clicked), self);
+  gtk_box_pack_start(GTK_BOX(box), bt, TRUE, TRUE, 0);
+
+  GList *children = gtk_container_get_children(GTK_CONTAINER(box));
+  for(GList *c = children; c; c = g_list_next(c))
+    dt_gui_add_class(GTK_WIDGET(c->data), "dt_module_btn");
+  g_list_free(children);
+
+  return box;
+}
 
 
 static gboolean _lightroom_ui(void)
@@ -1061,8 +1224,9 @@ static void _lib_modulegroups_update_iop_visibility(dt_lib_module_t *self)
         {
           // Lightroom: the Basic panel is followed by the other panels
           show_module = _lightroom_ui()
-                        && _lib_modulegroups_test_internal(self, 1, module)
-                        && (!(module->flags() & IOP_FLAGS_DEPRECATED) || module->enabled);
+                        && ((_lib_modulegroups_test_internal(self, 1, module)
+                             && (!(module->flags() & IOP_FLAGS_DEPRECATED) || module->enabled))
+                            || _lr_is_local_adjustment(module));
         }
         break;
 
@@ -1121,6 +1285,14 @@ static void _lib_modulegroups_update_iop_visibility(dt_lib_module_t *self)
     {
       GtkBox *panel = dt_ui_get_container(darktable.gui->ui, DT_UI_CONTAINER_PANEL_RIGHT_CENTER);
       int pos = 1;
+      // local adjustments (masked instances) first, like Lightroom's masks
+      for(const GList *m = g_list_last(darktable.develop->iop); m; m = g_list_previous(m))
+      {
+        dt_iop_module_t *module = m->data;
+        if(module->expander && _lr_is_local_adjustment(module)
+           && !_lib_modulegroups_test_internal(self, 1, module))
+          gtk_box_reorder_child(panel, module->expander, pos++);
+      }
       for(const GList *op = gr->modules; op; op = g_list_next(op))
         for(const GList *m = g_list_last(darktable.develop->iop); m; m = g_list_previous(m))
         {
@@ -1229,6 +1401,11 @@ static void _lib_modulegroups_switch_group(dt_lib_module_t *self, dt_iop_module_
 {
   /* lets find the group which is not active pipe */
   dt_lib_modulegroups_t *d = self->data;
+
+  // Lightroom column: panels and new local adjustments stay where they are
+  if(_lightroom_ui() && d->current == DT_MODULEGROUP_BASICS
+     && (_lib_modulegroups_test_internal(self, 1, module) || module->multi_priority > 0))
+    return;
   const int ngroups = g_list_length(d->groups);
   for(int k = 1; k <= ngroups; k++)
   {
@@ -3294,6 +3471,8 @@ void gui_init(dt_lib_module_t *self)
   gtk_entry_set_icon_tooltip_text(GTK_ENTRY(d->text_entry),
                                   GTK_ENTRY_ICON_SECONDARY, _("clear text"));
 
+  if(_lightroom_ui())
+    gtk_box_pack_start(GTK_BOX(self->widget), _lr_toolstrip(self), TRUE, TRUE, 0);
   gtk_box_pack_start(GTK_BOX(self->widget), d->hbox_buttons, TRUE, TRUE, 0);
   gtk_box_pack_start(GTK_BOX(self->widget), d->hbox_search_box, TRUE, TRUE, 0);
 

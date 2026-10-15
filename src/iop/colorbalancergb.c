@@ -133,6 +133,10 @@ typedef struct dt_iop_colorbalancergb_gui_data_t
   gboolean mask_display;
   dt_iop_colorbalancergb_mask_data_t mask_type;
   const dt_iop_order_iccprofile_info_t *sliders_output_profile;
+  // Lightroom-style color grading wheels: shadows, midtones, highlights, global
+  GtkWidget *wheel[4];
+  float wheel_rgb[72][3];
+  gboolean wheel_drag;
 } dt_iop_colorbalancergb_gui_data_t;
 
 
@@ -1391,8 +1395,17 @@ static void paint_chroma_slider(const dt_iop_order_iccprofile_info_t *output_pro
 
 static void paint_hue_sliders(const dt_iop_order_iccprofile_info_t *output_profile,
                               const dt_colormatrix_t output_matrix_LMS_to_RGB,
-                              const dt_iop_colorbalancergb_gui_data_t *const g)
+                              dt_iop_colorbalancergb_gui_data_t *const g)
 {
+  for(int k = 0; k < 72; k++)
+  {
+    const float h = CONVENTIONAL_DEG_TO_YRG_RAD((k + 0.5f) * 5.f);
+    const float max_chroma = Ych_max_chroma_without_negatives(output_matrix_LMS_to_RGB, cosf(h), sinf(h));
+    dt_aligned_pixel_t RGB;
+    _YchToRGB(&RGB, MIN(0.2f, max_chroma), h, output_profile, output_matrix_LMS_to_RGB);
+    for(int c = 0; c < 3; c++) g->wheel_rgb[k][c] = CLAMP(RGB[c], 0.f, 1.f);
+  }
+
   for(int i = 0; i < DT_BAUHAUS_SLIDER_MAX_STOPS; i++)
   {
     const float stop = ((float)i / (float)(DT_BAUHAUS_SLIDER_MAX_STOPS - 1));
@@ -1683,6 +1696,9 @@ void gui_changed(dt_iop_module_t *self, GtkWidget *w, void *previous)
   if(!w || w == g->shadows_weight || w == g->highlights_weight || w == g->mask_grey_fulcrum)
     gtk_widget_queue_draw(GTK_WIDGET(g->area));
 
+  for(int i = 0; i < 4; i++)
+    if(g->wheel[i]) gtk_widget_queue_draw(g->wheel[i]);
+
   DT_LEAVE_GUI_UPDATE();
 
   g->sliders_output_profile = output_profile;
@@ -1767,6 +1783,213 @@ void gui_reset(dt_iop_module_t *self)
 {
   //dt_iop_colorbalancergb_gui_data_t *g = self->gui_data;
   dt_iop_color_picker_reset(self, TRUE);
+}
+
+/* ---------------------------------------------------------------------------
+   Lightroom Classic style color wheels for the "4 ways" grading:
+   the angle sets the hue, the distance from the center the chroma
+   ------------------------------------------------------------------------- */
+
+static const char *_wheel_names[4] = { N_("Shadows"), N_("Midtones"), N_("Highlights"), N_("Global") };
+
+static void _wheel_sliders(const dt_iop_colorbalancergb_gui_data_t *g,
+                           const int i,
+                           GtkWidget **H,
+                           GtkWidget **C)
+{
+  switch(i)
+  {
+    case 0: *H = g->shadows_H; *C = g->shadows_C; break;
+    case 1: *H = g->midtones_H; *C = g->midtones_C; break;
+    case 2: *H = g->highlights_H; *C = g->highlights_C; break;
+    default: *H = g->global_H; *C = g->global_C; break;
+  }
+}
+
+static void _wheel_geometry(GtkWidget *widget,
+                            double *cx,
+                            double *cy,
+                            double *radius,
+                            double *label_y)
+{
+  const int w = gtk_widget_get_allocated_width(widget);
+  const int h = gtk_widget_get_allocated_height(widget);
+  const double label_h = DT_PIXEL_APPLY_DPI(20);
+  *radius = MAX(4.0, MIN(w, h - label_h) / 2.0 - DT_PIXEL_APPLY_DPI(4));
+  *cx = w / 2.0;
+  *cy = (h - label_h) / 2.0;
+  *label_y = h - label_h;
+}
+
+static gboolean _wheel_draw(GtkWidget *widget,
+                            cairo_t *cr,
+                            dt_iop_module_t *self)
+{
+  dt_iop_colorbalancergb_gui_data_t *g = self->gui_data;
+  const int i = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(widget), "wheel"));
+  GtkWidget *H = NULL, *C = NULL;
+  _wheel_sliders(g, i, &H, &C);
+  if(!H || !C) return FALSE;
+
+  double cx, cy, R, label_y;
+  _wheel_geometry(widget, &cx, &cy, &R, &label_y);
+
+  // hue disc, counter-clockwise from the right
+  const int N = 72;
+  for(int k = 0; k < N; k++)
+  {
+    const double a0 = 2.0 * M_PI * k / N;
+    const double a1 = 2.0 * M_PI * (k + 1) / N + 0.02;
+    cairo_move_to(cr, cx, cy);
+    cairo_arc_negative(cr, cx, cy, R, -a0, -a1);
+    cairo_close_path(cr);
+    cairo_set_source_rgb(cr, g->wheel_rgb[k][0], g->wheel_rgb[k][1], g->wheel_rgb[k][2]);
+    cairo_fill(cr);
+  }
+
+  // less chroma toward the center
+  cairo_pattern_t *fade = cairo_pattern_create_radial(cx, cy, 0, cx, cy, R);
+  cairo_pattern_add_color_stop_rgba(fade, 0.0, 0.42, 0.42, 0.42, 1.0);
+  cairo_pattern_add_color_stop_rgba(fade, 1.0, 0.42, 0.42, 0.42, 0.0);
+  cairo_arc(cr, cx, cy, R, 0, 2.0 * M_PI);
+  cairo_set_source(cr, fade);
+  cairo_fill(cr);
+  cairo_pattern_destroy(fade);
+
+  cairo_set_line_width(cr, 1.0);
+  cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.6);
+  cairo_arc(cr, cx, cy, R, 0, 2.0 * M_PI);
+  cairo_stroke(cr);
+
+  // small cross in the center
+  cairo_set_source_rgba(cr, 0.1, 0.1, 0.1, 0.6);
+  cairo_move_to(cr, cx - 3, cy);
+  cairo_line_to(cr, cx + 3, cy);
+  cairo_move_to(cr, cx, cy - 3);
+  cairo_line_to(cr, cx, cy + 3);
+  cairo_stroke(cr);
+
+  // handle
+  const float hue = dt_bauhaus_slider_get(H);
+  const float chroma = dt_bauhaus_slider_get(C);
+  const float cmax = fmaxf(1e-6f, dt_bauhaus_slider_get_soft_max(C));
+  const double r = R * CLAMP(chroma / cmax, 0.0f, 1.0f);
+  const double a = hue * M_PI / 180.0;
+  const double hx = cx + r * cos(a), hy = cy - r * sin(a);
+  cairo_arc(cr, hx, hy, DT_PIXEL_APPLY_DPI(4.5), 0, 2.0 * M_PI);
+  cairo_set_source_rgb(cr, 0.95, 0.95, 0.95);
+  cairo_fill_preserve(cr);
+  cairo_set_source_rgb(cr, 0.1, 0.1, 0.1);
+  cairo_stroke(cr);
+
+  // name under the wheel
+  GdkRGBA color;
+  GtkStyleContext *context = gtk_widget_get_style_context(widget);
+  gtk_style_context_get_color(context, gtk_widget_get_state_flags(widget), &color);
+  PangoLayout *layout = gtk_widget_create_pango_layout(widget, _(_wheel_names[i]));
+  int tw, th;
+  pango_layout_get_pixel_size(layout, &tw, &th);
+  gdk_cairo_set_source_rgba(cr, &color);
+  cairo_move_to(cr, cx - tw / 2.0, label_y + 1);
+  pango_cairo_show_layout(cr, layout);
+  g_object_unref(layout);
+
+  return TRUE;
+}
+
+static void _wheel_set_from_xy(dt_iop_module_t *self,
+                               GtkWidget *widget,
+                               const double x,
+                               const double y)
+{
+  dt_iop_colorbalancergb_gui_data_t *g = self->gui_data;
+  const int i = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(widget), "wheel"));
+  GtkWidget *H = NULL, *C = NULL;
+  _wheel_sliders(g, i, &H, &C);
+
+  double cx, cy, R, label_y;
+  _wheel_geometry(widget, &cx, &cy, &R, &label_y);
+  const double dx = x - cx, dy = cy - y;
+  const double r = fmin(1.0, hypot(dx, dy) / R);
+  double deg = atan2(dy, dx) * 180.0 / M_PI;
+  if(deg < 0.0) deg += 360.0;
+
+  dt_bauhaus_slider_set(H, deg);
+  dt_bauhaus_slider_set(C, r * dt_bauhaus_slider_get_soft_max(C));
+  gtk_widget_queue_draw(widget);
+}
+
+static gboolean _wheel_button_press(GtkWidget *widget,
+                                    GdkEventButton *event,
+                                    dt_iop_module_t *self)
+{
+  dt_iop_colorbalancergb_gui_data_t *g = self->gui_data;
+  if(event->button != GDK_BUTTON_PRIMARY) return FALSE;
+  dt_iop_request_focus(self);
+
+  if(event->type == GDK_2BUTTON_PRESS)
+  {
+    // double-click resets this wheel, like in Lightroom
+    const int i = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(widget), "wheel"));
+    GtkWidget *H = NULL, *C = NULL;
+    _wheel_sliders(g, i, &H, &C);
+    dt_bauhaus_widget_reset(C);
+    dt_bauhaus_widget_reset(H);
+    g->wheel_drag = FALSE;
+    gtk_widget_queue_draw(widget);
+    return TRUE;
+  }
+
+  g->wheel_drag = TRUE;
+  _wheel_set_from_xy(self, widget, event->x, event->y);
+  return TRUE;
+}
+
+static gboolean _wheel_button_release(GtkWidget *widget,
+                                      GdkEventButton *event,
+                                      dt_iop_module_t *self)
+{
+  dt_iop_colorbalancergb_gui_data_t *g = self->gui_data;
+  g->wheel_drag = FALSE;
+  return TRUE;
+}
+
+static gboolean _wheel_motion(GtkWidget *widget,
+                              GdkEventMotion *event,
+                              dt_iop_module_t *self)
+{
+  dt_iop_colorbalancergb_gui_data_t *g = self->gui_data;
+  if(g->wheel_drag) _wheel_set_from_xy(self, widget, event->x, event->y);
+  return TRUE;
+}
+
+static GtkWidget *_wheels_new(dt_iop_module_t *self)
+{
+  dt_iop_colorbalancergb_gui_data_t *g = self->gui_data;
+  GtkWidget *grid = gtk_grid_new();
+  gtk_widget_set_name(grid, "color-grading-wheels");
+  gtk_grid_set_column_homogeneous(GTK_GRID(grid), TRUE);
+
+  for(int i = 0; i < 4; i++)
+  {
+    GtkWidget *da = gtk_drawing_area_new();
+    g_object_set_data(G_OBJECT(da), "wheel", GINT_TO_POINTER(i));
+    gtk_widget_set_size_request(da, -1, DT_PIXEL_APPLY_DPI(i == 3 ? 104 : 112));
+    gtk_widget_add_events(da, GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK
+                              | GDK_POINTER_MOTION_MASK);
+    g_signal_connect(da, "draw", G_CALLBACK(_wheel_draw), self);
+    g_signal_connect(da, "button-press-event", G_CALLBACK(_wheel_button_press), self);
+    g_signal_connect(da, "button-release-event", G_CALLBACK(_wheel_button_release), self);
+    g_signal_connect(da, "motion-notify-event", G_CALLBACK(_wheel_motion), self);
+    gtk_widget_set_tooltip_text(da, _("drag to set hue and amount of color\n"
+                                      "double-click to reset"));
+    g->wheel[i] = da;
+  }
+  gtk_grid_attach(GTK_GRID(grid), g->wheel[0], 0, 0, 1, 1);
+  gtk_grid_attach(GTK_GRID(grid), g->wheel[1], 1, 0, 1, 1);
+  gtk_grid_attach(GTK_GRID(grid), g->wheel[2], 2, 0, 1, 1);
+  gtk_grid_attach(GTK_GRID(grid), g->wheel[3], 1, 1, 1, 1);
+  return grid;
 }
 
 void gui_init(dt_iop_module_t *self)
@@ -1871,6 +2094,9 @@ void gui_init(dt_iop_module_t *self)
 
   // Page 4-ways
   self->widget = dt_ui_notebook_page(g->notebook, N_("4 ways"), _("selective color grading"));
+
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui"))
+    dt_gui_box_add(self->widget, _wheels_new(self));
 
   const char *hue_picker_tooltip = _("pick opposite color from image\nctrl+click to pick selected color");
 
