@@ -140,6 +140,7 @@ typedef struct dt_bauhaus_t
   float baseline_size;                   // height of the slider bar
   float border_width;                    // width of the border of the slider marker
   float quad_width;                      // width of the quad area to paint icons
+  gboolean lr_layout;                    // Lightroom-style single-row sliders
   PangoFontDescription *pango_font_desc; // no need to recreate this for every string we want to print
 
   // the slider popup has a blinking cursor
@@ -172,6 +173,8 @@ dt_action_t *dt_bauhaus_widget_set_label(GtkWidget *widget,
                                          const char *label);
 const char* dt_bauhaus_widget_get_label(GtkWidget *widget);
 void dt_bauhaus_widget_hide_label(GtkWidget *widget);
+// show a different label than the one the action is named after
+void dt_bauhaus_widget_set_display_label(GtkWidget *widget, const char *label);
 void dt_bauhaus_widget_set_show_extended_label(GtkWidget *widget,
                                                gboolean show);
 void dt_bauhaus_widget_set_module(GtkWidget *widget,

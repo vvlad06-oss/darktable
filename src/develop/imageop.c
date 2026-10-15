@@ -2503,6 +2503,7 @@ static void _gui_set_single_expanded(dt_iop_module_t *module, gboolean expanded)
 
   /* update expander arrow state */
   dtgtk_expander_set_expanded(DTGTK_EXPANDER(module->expander), expanded);
+  if(module->header) gtk_widget_queue_draw(module->header);
 
   /* store expanded state of module.
    * we do that first, so update_expanded won't think it should be visible
@@ -2579,6 +2580,7 @@ void dt_iop_gui_update_expanded(dt_iop_module_t *module)
   const gboolean expanded = module->expanded;
 
   dtgtk_expander_set_expanded(DTGTK_EXPANDER(module->expander), expanded);
+  if(module->header) gtk_widget_queue_draw(module->header);
 }
 
 static gboolean _iop_plugin_body_button_press(GtkWidget *w,
@@ -3064,6 +3066,38 @@ GtkWidget *dt_iop_gui_header_button(dt_iop_module_t *module,
   return button;
 }
 
+// Lightroom-style disclosure triangle in processing module headers:
+// pointing left when collapsed, down when expanded
+static gboolean _lr_header_arrow_draw(GtkWidget *widget,
+                                      cairo_t *cr,
+                                      dt_iop_module_t *module)
+{
+  const int w = gtk_widget_get_allocated_width(widget);
+  const int h = gtk_widget_get_allocated_height(widget);
+  GdkRGBA color;
+  GtkStyleContext *context = gtk_widget_get_style_context(widget);
+  gtk_style_context_get_color(context, gtk_widget_get_state_flags(widget), &color);
+
+  const double s = MIN(w, h) * 0.30;
+  const double cx = w * 0.5, cy = h * 0.5;
+  if(module->expanded)
+  {
+    cairo_move_to(cr, cx - s, cy - s * 0.55);
+    cairo_line_to(cr, cx + s, cy - s * 0.55);
+    cairo_line_to(cr, cx, cy + s * 0.75);
+  }
+  else
+  {
+    cairo_move_to(cr, cx + s * 0.55, cy - s);
+    cairo_line_to(cr, cx + s * 0.55, cy + s);
+    cairo_line_to(cr, cx - s * 0.75, cy);
+  }
+  cairo_close_path(cr);
+  gdk_cairo_set_source_rgba(cr, &color);
+  cairo_fill(cr);
+  return TRUE;
+}
+
 static gboolean _on_drag_motion(GtkWidget *widget,
                                 GdkDragContext *dc,
                                 const gint x,
@@ -3073,6 +3107,12 @@ static gboolean _on_drag_motion(GtkWidget *widget,
 {
   gdk_drag_status(dc, 0, time);
   dtgtk_expander_set_drag_hover(DTGTK_EXPANDER(widget), FALSE, TRUE, time);
+
+  // panels are shown in Lightroom order, not in pipeline order: dragging
+  // a header must not move the module in the pipeline
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui")
+     && dt_dev_modulegroups_get_activated(darktable.develop) == DT_MODULEGROUP_BASICS)
+    return TRUE;
 
   GtkWidget *src_header = gtk_drag_get_source_widget(dc);
   if(!src_header) return TRUE;
@@ -3210,9 +3250,31 @@ void dt_iop_gui_set_expander(dt_iop_module_t *module)
   gtk_widget_set_valign(module->label, GTK_ALIGN_BASELINE);
   g_object_set(G_OBJECT(module->label), "xalign", 0.0, (gchar *)0);
 
-  gtk_container_add(GTK_CONTAINER(lab), module->label);
-  gtk_widget_set_valign(lab, GTK_ALIGN_BASELINE);
-  gtk_widget_set_halign(lab, GTK_ALIGN_START);
+  const gboolean lightroom = dt_conf_get_bool("plugins/darkroom/lightroom_ui");
+  if(lightroom)
+  {
+    // Lightroom Classic: panel name aligned to the right, followed by a
+    // disclosure triangle
+    g_object_set(G_OBJECT(module->label), "xalign", 1.0, (gchar *)0);
+    GtkWidget *lbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_box_pack_start(GTK_BOX(lbox), module->label, TRUE, TRUE, 0);
+    GtkWidget *arrow = gtk_drawing_area_new();
+    gtk_widget_set_name(arrow, "iop-panel-arrow");
+    gtk_widget_set_size_request(arrow, DT_PIXEL_APPLY_DPI(16), DT_PIXEL_APPLY_DPI(16));
+    gtk_widget_set_valign(arrow, GTK_ALIGN_CENTER);
+    g_signal_connect(G_OBJECT(arrow), "draw", G_CALLBACK(_lr_header_arrow_draw), module);
+    gtk_box_pack_start(GTK_BOX(lbox), arrow, FALSE, FALSE, 0);
+    gtk_container_add(GTK_CONTAINER(lab), lbox);
+    gtk_widget_set_valign(lab, GTK_ALIGN_CENTER);
+    gtk_widget_set_halign(lab, GTK_ALIGN_FILL);
+    gtk_widget_set_hexpand(lab, TRUE);
+  }
+  else
+  {
+    gtk_container_add(GTK_CONTAINER(lab), module->label);
+    gtk_widget_set_valign(lab, GTK_ALIGN_BASELINE);
+    gtk_widget_set_halign(lab, GTK_ALIGN_START);
+  }
 
   module->instance_name = gtk_label_new("");
   gtk_widget_set_name(module->instance_name, "iop-module-name");
@@ -3266,8 +3328,16 @@ void dt_iop_gui_set_expander(dt_iop_module_t *module)
   gtk_widget_set_sensitive(module->off, !module->hide_enable_button);
 
   gtk_box_pack_start(GTK_BOX(header), icon, FALSE, FALSE, 0);
-  gtk_box_pack_start(GTK_BOX(header), lab, FALSE, FALSE, 0);
-  gtk_box_pack_start(GTK_BOX(header), module->instance_name, FALSE, FALSE, 0);
+  if(lightroom)
+  {
+    gtk_box_pack_start(GTK_BOX(header), module->instance_name, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(header), lab, TRUE, TRUE, 0);
+  }
+  else
+  {
+    gtk_box_pack_start(GTK_BOX(header), lab, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(header), module->instance_name, FALSE, FALSE, 0);
+  }
 
   dt_gui_add_help_link(lab, module->op);
   dt_gui_add_help_link(expander, module->op);

@@ -316,6 +316,21 @@ dt_l10n_t *dt_l10n_init(const gboolean init_list)
 
   gchar *ui_lang = g_strdup(dt_conf_get_string("ui_last/gui_language"));
 
+  // the Lightroom Classic edition defaults to Lightroom-flavoured English
+  if(!ui_lang || !*ui_lang)
+  {
+    char lr_localedir[PATH_MAX] = { 0 };
+    dt_loc_get_localedir(lr_localedir, sizeof(lr_localedir));
+    gchar *lr_mo = g_build_filename(lr_localedir, "en@lightroom",
+                                    "LC_MESSAGES", GETTEXT_PACKAGE ".mo", NULL);
+    if(g_file_test(lr_mo, G_FILE_TEST_EXISTS))
+    {
+      g_free(ui_lang);
+      ui_lang = g_strdup("en@lightroom");
+    }
+    g_free(lr_mo);
+  }
+
   const char *old_env = g_getenv("LANGUAGE");
 
 #if defined(_WIN32)

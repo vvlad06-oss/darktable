@@ -1,0 +1,327 @@
+/*
+    This file is part of darktable,
+    Copyright (C) 2026 darktable developers.
+
+    darktable is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    darktable is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with darktable.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
+/* Lightroom Classic look: matte neutral greys, thin slider tracks,
+   panel headers with the name on the right. Colors only - the image
+   processing is darktable's. */
+
+@import url("darktable.css");
+@import url("chunk-fonts.css");
+
+/* ---------------------------------------------------------------------
+   1. Base palette (neutral matte greys)
+   --------------------------------------------------------------------- */
+@define-color bg_color              #2b2b2b;  /* side panels                   */
+@define-color fg_color              #c9c9c9;  /* general text                  */
+@define-color border_color          #161616;  /* outer borders ("b")           */
+@define-color selected_bg_color     #4a4a4a;
+@define-color text_color            #161616;
+@define-color placeholder_text_color #7a7a7a;
+@define-color disabled_fg_color     #707070;  /* inactive views in the top bar */
+
+@define-color scroll_bar_inactive   #444444;
+@define-color scroll_bar_active     #666666;
+@define-color scroll_bar_bg         #2b2b2b;
+
+/* processing modules (the Lightroom panels) */
+@define-color plugin_bg_color       #2b2b2b;  /* module body = same grey as the panel */
+@define-color plugin_label_color    #dadada;  /* module name                   */
+@define-color section_label         #9a9a9a;  /* section titles in modules     */
+@define-color collapsible_bg_color  #303030;
+
+/* ---------------------------------------------------------------------
+   2. Sliders: thin dark track, light pointer
+   --------------------------------------------------------------------- */
+@define-color bauhaus_bg            #1b1b1b;  /* track                         */
+@define-color bauhaus_fill          #5a5a5a;  /* subtle fill; same as bauhaus_bg for an empty track */
+@define-color bauhaus_border        #1b1b1b;
+@define-color bauhaus_fg            #d4d4d4;  /* values and the pointer         */
+@define-color bauhaus_indicator_border #141414;
+@define-color bauhaus_fg_hover      #ffffff;
+@define-color bauhaus_fg_selected   #e6e6e6;
+@define-color bauhaus_fg_insensitive alpha(#c9c9c9, 0.35);
+
+/* ---------------------------------------------------------------------
+   3. Buttons, fields, tooltips (grey, no blue)
+   --------------------------------------------------------------------- */
+@define-color button_bg             #383838;
+@define-color button_fg             #c9c9c9;
+@define-color button_border         #383838;
+@define-color button_hover_bg       #5c5c5c;
+@define-color button_hover_fg       #ffffff;
+
+@define-color field_bg              #1f1f1f;
+@define-color field_fg              #d8d8d8;
+@define-color field_active_bg       #333333;
+@define-color field_active_fg       #ffffff;
+@define-color field_selected_bg     #575757;
+@define-color field_selected_fg     #ffffff;
+@define-color field_hover_bg        #4a4a4a;
+@define-color field_hover_fg        #ffffff;
+
+@define-color tooltip_bg_color      #1e1e1e;
+@define-color tooltip_fg_color      #d6d6d6;
+@define-color really_dark_bg_color  #161616;
+@define-color log_fg_color          #e6e6e6;
+
+/* ---------------------------------------------------------------------
+   4. Background around the photo
+   Lightroom uses a medium grey by default. Avoid black: on black the
+   photo looks brighter and more contrasty than it is.
+   For strict color assessment use #777777 (darktable default).
+   --------------------------------------------------------------------- */
+@define-color darkroom_bg_color           #4d4d4d;
+@define-color darkroom_preview_bg_color   #4d4d4d;
+@define-color print_bg_color              #4d4d4d;
+
+/* ---------------------------------------------------------------------
+   5. Lighttable / filmstrip: grey cells like the Library grid
+   --------------------------------------------------------------------- */
+@define-color lighttable_bg_color         #262626;
+@define-color lighttable_preview_bg_color #262626;
+@define-color lighttable_bg_font_color    #8a8a8a;
+@define-color filmstrip_bg_color          #1f1f1f;
+
+@define-color thumbnail_bg_color          #3a3a3a;
+@define-color thumbnail_hover_bg_color    #4b4b4b;
+@define-color thumbnail_selected_bg_color #6b6b6b;
+@define-color thumbnail_font_color        #d2d2d2;  /* stars, extension, icons */
+@define-color thumbnail_fg_color          #a6a6a6;
+@define-color thumbnail_star_bg_color     #6b6b6b;
+@define-color thumbnail_star_hover_color  #ffffff;
+@define-color thumbnail_hover_fg_color    #ffffff;
+@define-color thumbnail_localcopy         #e0e0e0;
+
+/* ---------------------------------------------------------------------
+   6. Histogram and curves
+   --------------------------------------------------------------------- */
+@define-color graph_bg        #222222;
+@define-color graph_exterior  #1d1d1d;
+@define-color graph_border    #161616;
+@define-color graph_grid      #2f2f2f;
+@define-color graph_fg        #cfcfcf;
+@define-color graph_fg_active #ffffff;
+@define-color graph_overlay   #6a6a6a;
+@define-color inset_histogram alpha(#9a9a9a, 0.5);
+
+
+/* =====================================================================
+   7. Fonts (macOS system fonts by name, GTK has no -apple-system)
+   Same selectors as chunk-fonts.css so these win.
+   ===================================================================== */
+.dt_plugin_ui, .dt_bauhaus, .dt_bauhaus_popup,
+combobox, combobox *, togglebutton, togglebutton *,
+notebook, notebook *, notebook tab, notebook tab *,
+table, table *, row, row *, frame, frame *, entry, entry *,
+dialog, dialog *, stack, stack *, eventbox, eventbox *,
+scale, scale *, button, button *, treeview, treeview *,
+menu, menu *, box, box *,
+#iop-panel-label, #lib-panel-label,
+.dt_section_label:not(#blending-box),
+notebook tabs, tooltip label, #blending-tabs, #modules-tabs
+{
+  font-family: "SF Pro Text", "Helvetica Neue", "Lucida Grande", sans-serif;
+}
+
+
+/* =====================================================================
+   8. Top bar view switcher, like "Library | Develop"
+   ===================================================================== */
+#view-label,
+#view-dropdown
+{
+  font-size: 1.35em;
+  font-weight: 300;
+  color: #6f6f6f;
+}
+
+#view-label:selected
+{
+  color: #e8e8e8;
+}
+
+#header-toolbar,
+#footer-toolbar
+{
+  background-color: #222222;
+}
+
+
+/* =====================================================================
+   9. Module headers = Lightroom panel headers
+   (style the whole row, not only the label)
+   ===================================================================== */
+#module-header
+{
+  background-color: #313131;
+  border-top: 1px solid #3a3a3a;
+  border-bottom: 1px solid #1a1a1a;
+  padding: 0.4em 0.5em;
+}
+
+#iop-expander.dt_module_focus #module-header
+{
+  background-color: #383838;
+}
+
+#iop-panel-label,
+#lib-panel-label
+{
+  color: @plugin_label_color;
+  font-size: 1.05em;
+  font-weight: 500;
+  padding: 0 0.14em 0 0.45em;
+}
+
+.dt_module_focus #iop-panel-label
+{
+  color: #ffffff;
+}
+
+/* instance name */
+#iop-module-name,
+#lib-module-name
+{
+  color: #8c8c8c;
+}
+
+
+/* =====================================================================
+   10. Module bodies: roomier, like Lightroom panels
+   ===================================================================== */
+.dt_plugin_ui_main,
+#blending-box
+{
+  padding: 0.45em 0.9em 0.7em 0.9em;
+}
+
+.dt_bauhaus
+{
+  margin: 0.12em 0;
+}
+
+.dt_section_label
+{
+  border-bottom: 1px solid #3a3a3a;
+  margin: 0.45em 0 0.2em 0;
+}
+
+/* notebook tabs inside modules */
+notebook tab:checked
+{
+  color: #ffffff;
+}
+
+
+/* =====================================================================
+   11. Module group tabs
+   ===================================================================== */
+#modules-tabs
+{
+  background-color: #262626;
+}
+
+
+/* =====================================================================
+   12. Lighttable: light stars/text on dark cells
+   ===================================================================== */
+#thumb-back
+{
+  border: 1px solid #1f1f1f;
+}
+
+/* discreet inactive stars on dark cells */
+.dt_overlays_always #thumb-star,
+.dt_overlays_always_extended #thumb-star,
+.dt_overlays_mixed #thumb-star,
+.dt_overlays_hover_block #thumb-star
+{
+  color: #6a6a6a;
+}
+
+/* dark info band on hover */
+.dt_overlays_hover_extended #thumb-main:hover #thumb-bottom,
+.dt_overlays_mixed #thumb-main:hover #thumb-bottom,
+.dt_overlays_hover #thumb-main:hover #thumb-bottom
+{
+  background-image: linear-gradient(rgba(40, 40, 40, 0.85) 0%,
+                                    rgba(40, 40, 40, 0.85) 90%,
+                                    rgba(40, 40, 40, 0) 100%);
+}
+
+.dt_overlays_hover_block #thumb-image:hover #thumb-bottom
+{
+  background-image: none;
+  background-color: rgba(30, 30, 30, 0.85);
+}
+
+
+/* =====================================================================
+   13. Lightroom panels
+   ===================================================================== */
+#iop-panel-arrow
+{
+  color: #8a8a8a;
+  min-width: 1.1em;
+}
+
+#iop-expander:hover #iop-panel-arrow,
+.dt_module_focus #iop-panel-arrow
+{
+  color: #e0e0e0;
+}
+
+/* the Basic panel built from the quick access widgets */
+#basics-box-lightroom
+{
+  background-color: @plugin_bg_color;
+}
+
+#basics-lr-header
+{
+  background-color: #313131;
+  border-top: 1px solid #3a3a3a;
+  border-bottom: 1px solid #1a1a1a;
+  padding: 0.45em 1.6em 0.45em 0.5em;
+}
+
+#basics-lr-title
+{
+  color: @plugin_label_color;
+  font-size: 1.05em;
+  font-weight: 500;
+}
+
+#basics-lr-body
+{
+  padding: 0.45em 0.9em 0.8em 0.9em;
+  border-bottom: 1px solid #1a1a1a;
+}
+
+#basics-lr-section
+{
+  color: #b4b4b4;
+  border-bottom: none;
+  margin: 0.7em 0 0.15em 0;
+  font-weight: 500;
+}
+
+#basics-lr-body .dt_bauhaus
+{
+  margin: 0.08em 0;
+}

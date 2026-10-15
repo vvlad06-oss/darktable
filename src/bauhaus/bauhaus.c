@@ -124,6 +124,13 @@ struct _DtBauhausWidget
   // gap to add to the top padding due to the vertical centering
   int top_gap;
 
+  // Lightroom-style single-row layout: cached natural widths (<0 = unknown)
+  float lr_label_w;
+  float lr_value_w;
+  float lr_value_min, lr_value_max;
+  // optional label shown instead of `label' (does not change the action id)
+  gchar *display_label;
+
   // goes last, might extend past the end:
   union
   {
@@ -154,9 +161,14 @@ static const dt_action_def_t _action_def_slider, _action_def_combo,
 // INNER_PADDING is the horizontal space between slider and quad
 // and vertical space between labels and slider baseline
 static double INNER_PADDING = 4.0;
+// standard width of the value column in Lightroom layout (<0 = unknown)
+static float _lr_value_std = -1.0f;
 
 // fwd declare
 static void _popup_reject(void);
+static gchar *_build_label(const dt_bauhaus_widget_t *w);
+static float _slider_pos_from_x(dt_bauhaus_widget_t *w, const double x,
+                                float *track_x, float *track_w);
 static void _popup_hide(void);
 static gboolean _popup_draw(GtkWidget *widget, cairo_t *cr, gpointer user_data);
 static gboolean _popup_key_press(GtkWidget *widget, GdkEventKey *event, gpointer user_data);
@@ -759,6 +771,7 @@ static void _widget_finalize(GObject *widget)
   g_free(w->label);
   g_free(w->section);
   g_free(w->tooltip);
+  g_free(w->display_label);
 
   G_OBJECT_CLASS(dt_bh_parent_class)->finalize(widget);
 }
@@ -849,8 +862,19 @@ void dt_bauhaus_load_theme()
                      : !g_strcmp0(shape, "bar")     ? DT_BAUHAUS_MARKER_BAR
                                                     : DT_BAUHAUS_MARKER_TRIANGLE;
 
+  bh->lr_layout = dt_conf_get_bool("bauhaus/lightroom_layout");
+  _lr_value_std = -1.0f;
+
   // absolute size in Cairo unit:
-  if(dt_conf_get_bool("bauhaus/condensed"))
+  if(bh->lr_layout)
+  {
+    // thin track and a small pointer, as in Lightroom Classic
+    bh->quad_width = bh->line_height;
+    bh->baseline_size = fmaxf(2.0f, bh->line_height / 7.0f);
+    bh->border_width = 1.0f;
+    bh->marker_size = bh->line_height * 0.34f;
+  }
+  else if(dt_conf_get_bool("bauhaus/condensed"))
   {
     bh->quad_width = bh->line_height * 0.8;
     bh->baseline_size = bh->line_height / 4.5f;
@@ -1058,6 +1082,7 @@ dt_action_t *dt_bauhaus_widget_set_label(GtkWidget *widget,
   g_free(w->label);
   w->label = label ? g_strdup(Q_(label)) : NULL;
   if(section) w->section = g_strdup(Q_(section));
+  w->lr_label_w = -1.0f;
 
   if(w->module)
   {
@@ -1086,6 +1111,17 @@ void dt_bauhaus_widget_hide_label(GtkWidget *widget)
 {
   dt_bauhaus_widget_t *w = DT_BAUHAUS_WIDGET(widget);
   w->show_label = FALSE;
+  w->lr_label_w = -1.0f;
+}
+
+void dt_bauhaus_widget_set_display_label(GtkWidget *widget,
+                                         const char *label)
+{
+  dt_bauhaus_widget_t *w = DT_BAUHAUS_WIDGET(widget);
+  g_free(w->display_label);
+  w->display_label = label ? g_strdup(label) : NULL;
+  w->lr_label_w = -1.0f;
+  gtk_widget_queue_draw(widget);
 }
 
 void dt_bauhaus_widget_set_show_extended_label(GtkWidget *widget,
@@ -1093,6 +1129,7 @@ void dt_bauhaus_widget_set_show_extended_label(GtkWidget *widget,
 {
   dt_bauhaus_widget_t *w = DT_BAUHAUS_WIDGET(widget);
   w->show_extended_label = show;
+  w->lr_label_w = -1.0f;
 }
 
 void dt_bauhaus_widget_set_module(GtkWidget *widget,
@@ -1155,10 +1192,11 @@ gchar *dt_bauhaus_widget_get_tooltip_markup(GtkWidget *widget,
     dt_bauhaus_widget_t *w = DT_BAUHAUS_WIDGET(widget);
     dt_bauhaus_slider_data_t *d = &w->slider;
 
-    const float pos = (x - w->margin.left - w->padding.left) / _widget_width(w);
+    const float pos = _slider_pos_from_x(w, x, NULL, NULL);
 
-    if(y > darktable.bauhaus->line_height / 2.0f + w->margin.top + w->padding.top
-       && pos <= 1.0f)
+    if((darktable.bauhaus->lr_layout
+        || y > darktable.bauhaus->line_height / 2.0f + w->margin.top + w->padding.top)
+       && pos >= 0.0f && pos <= 1.0f)
       dt_util_str_cat(&markup, "%s<b>%s</b>", markup ? "\n" : "",
                                dt_bauhaus_slider_get_text(widget, pos * (d->max - d->min) + d->min));
 
@@ -1997,6 +2035,101 @@ void dt_bauhaus_slider_set_stop(GtkWidget *widget,
   }
 }
 
+
+/* ---------------------------------------------------------------------------
+   Lightroom-style layout: label | track | value on a single row.
+   Tracks of sibling widgets (same parent container) are aligned, like the
+   panels in Lightroom Classic.
+   ------------------------------------------------------------------------- */
+
+static float _lr_measure(dt_bauhaus_widget_t *w,
+                         const char *text)
+{
+  if(!text || !*text) return 0.0f;
+  cairo_surface_t *cst = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
+  cairo_t *cr = cairo_create(cst);
+  float width = 0.0f, height = 0.0f;
+  _show_pango_text(w, gtk_widget_get_style_context(GTK_WIDGET(w)), cr, text,
+                   0, 0, 0, FALSE, TRUE, PANGO_ELLIPSIZE_NONE, FALSE, FALSE,
+                   &width, &height);
+  cairo_destroy(cr);
+  cairo_surface_destroy(cst);
+  return width;
+}
+
+static gboolean _lr_shows_label(const dt_bauhaus_widget_t *w)
+{
+  if(!w->show_label || !(w->label || w->display_label)) return FALSE;
+  if(w->type == DT_BAUHAUS_COMBOBOX
+     && w->combobox.text_align != DT_BAUHAUS_COMBOBOX_ALIGN_RIGHT)
+    return FALSE;
+  return TRUE;
+}
+
+static float _lr_value_width(dt_bauhaus_widget_t *w)
+{
+  if(w->type != DT_BAUHAUS_SLIDER) return 0.0f;
+  const dt_bauhaus_slider_data_t *d = &w->slider;
+  if(w->lr_value_w < 0.0f || w->lr_value_min != d->min || w->lr_value_max != d->max)
+  {
+    float width = 0.0f;
+    const float probes[3] = { d->min, d->max, d->min + 0.5f * (d->max - d->min) };
+    for(int k = 0; k < 3; k++)
+    {
+      char *text = dt_bauhaus_slider_get_text(GTK_WIDGET(w), probes[k]);
+      width = fmaxf(width, _lr_measure(w, text));
+      g_free(text);
+    }
+    w->lr_value_w = width;
+    w->lr_value_min = d->min;
+    w->lr_value_max = d->max;
+  }
+  return w->lr_value_w;
+}
+
+// compute where the track starts and how wide it is, inside a content
+// area of width `w3' (same coordinates as used for drawing). Columns are
+// proportional and identical for every widget, so that all the sliders of
+// all panels line up, as in Lightroom Classic.
+static void _lr_geometry(dt_bauhaus_widget_t *w,
+                         const float w3,
+                         float *track_x,
+                         float *track_w)
+{
+  dt_bauhaus_t *bh = darktable.bauhaus;
+  if(_lr_value_std < 0.0f) _lr_value_std = _lr_measure(w, "+0.000 EV");
+
+  const float gap = 2.0f * INNER_PADDING + bh->marker_size;
+  const gboolean has_label = _lr_shows_label(w);
+  const float label_col = has_label ? 0.34f * w3 : 0.0f;
+  float value_col = 0.0f;
+  if(w->type == DT_BAUHAUS_SLIDER)
+    value_col = fminf(fmaxf(_lr_value_std, _lr_value_width(w)), 0.34f * w3);
+  else
+    value_col = _lr_value_std;
+
+  const float start = has_label ? label_col + gap - bh->marker_size : bh->marker_size;
+  const float end = w3 - (value_col > 0.0f ? value_col + gap : bh->marker_size);
+  *track_x = start;
+  *track_w = fmaxf(10.0f, end - start);
+}
+
+// map a widget x coordinate to a normalized slider position
+static float _slider_pos_from_x(dt_bauhaus_widget_t *w,
+                                const double x,
+                                float *track_x,
+                                float *track_w)
+{
+  const float width = _widget_width(w);
+  const float rel = x - w->margin.left - w->padding.left;
+  float tx = 0.0f, tw = width;
+  if(darktable.bauhaus->lr_layout && w->type == DT_BAUHAUS_SLIDER)
+    _lr_geometry(w, width, &tx, &tw);
+  if(track_x) *track_x = tx;
+  if(track_w) *track_w = tw;
+  return (rel - tx) / tw;
+}
+
 static void _draw_indicator_shape(cairo_t *cr, float radius)
 {
   dt_bauhaus_t *bh = darktable.bauhaus;
@@ -2312,6 +2445,8 @@ static void _popup_reject(void)
 
 static gchar *_build_label(const dt_bauhaus_widget_t *w)
 {
+  if(w->display_label)
+    return g_strdup(w->display_label);
   if(w->show_extended_label && w->section)
     return g_strdup_printf("%s - %s", w->section, w->label);
   else
@@ -2671,8 +2806,21 @@ static gboolean _widget_draw(GtkWidget *widget,
                        TRUE, TRUE, combo_ellipsis, FALSE, FALSE, &combo_width, &combo_height);
       // we want to center the text vertically
       w->top_gap = floor((h3 - fmaxf(label_height, combo_height)) / 2.0f);
+      if(darktable.bauhaus->lr_layout && w->show_label
+         && d->text_align == DT_BAUHAUS_COMBOBOX_ALIGN_RIGHT && label_text)
+      {
+        // Lightroom style: label on the left, value starting where the
+        // slider tracks of the sibling widgets start
+        float tx = 0.0f, tw = w3;
+        _lr_geometry(w, w3, &tx, &tw);
+        _show_pango_text(w, context, cr, label_text, 0, w->top_gap,
+                         tx - INNER_PADDING,
+                         FALSE, FALSE, PANGO_ELLIPSIZE_END, FALSE, TRUE, NULL, NULL);
+        _show_pango_text(w, context, cr, text, tx, w->top_gap, w3 - tx,
+                         FALSE, FALSE, combo_ellipsis, FALSE, FALSE, NULL, NULL);
+      }
       //check if they fit
-      if((label_width + combo_width) > w3)
+      else if((label_width + combo_width) > w3)
       {
         if(d->text_align == DT_BAUHAUS_COMBOBOX_ALIGN_RIGHT)
         {
@@ -2719,6 +2867,43 @@ static gboolean _widget_draw(GtkWidget *widget,
       break;
     }
     case DT_BAUHAUS_SLIDER:
+    if(darktable.bauhaus->lr_layout)
+    {
+      dt_bauhaus_t *bh = darktable.bauhaus;
+      float tx = 0.0f, tw = w3;
+      _lr_geometry(w, w3, &tx, &tw);
+      const float ty = floorf((h3 - bh->line_height) / 2.0f);
+      w->top_gap = ty;
+
+      // track, vertically centred on the row
+      const float bl_center = bh->line_height + INNER_PADDING
+                              + (bh->baseline_size - bh->border_width) / 2.0f;
+      cairo_save(cr);
+      cairo_translate(cr, tx, h3 / 2.0f - bl_center);
+      _draw_baseline(w, cr, tw);
+      if(gtk_widget_is_sensitive(widget))
+        _draw_indicator(w, w->slider.pos, cr, tw, *fg_color, *bg_color);
+      cairo_restore(cr);
+
+      set_color(cr, *text_color);
+      if(gtk_widget_is_sensitive(widget))
+      {
+        char *text = dt_bauhaus_slider_get_text(widget, dt_bauhaus_slider_get(widget));
+        _show_pango_text(w, context, cr, text, w3, ty, 0,
+                         TRUE, FALSE, PANGO_ELLIPSIZE_END, FALSE, FALSE, NULL, NULL);
+        g_free(text);
+      }
+      if(_lr_shows_label(w))
+      {
+        gchar *label_text = _build_label(w);
+        const float label_room = tx - INNER_PADDING - bh->marker_size;
+        if(label_room > 0)
+          _show_pango_text(w, context, cr, label_text, 0, ty, label_room,
+                           FALSE, FALSE, PANGO_ELLIPSIZE_END, FALSE, TRUE, NULL, NULL);
+        g_free(label_text);
+      }
+    }
+    else
     {
       // line for orientation
       _draw_baseline(w, cr, w3);
@@ -2858,7 +3043,12 @@ static void _widget_get_preferred_height(GtkWidget *widget,
 
   *minimum_height = w->margin.top + w->margin.bottom + w->padding.top + w->padding.bottom
                     + darktable.bauhaus->line_height;
-  if(w->type == DT_BAUHAUS_SLIDER)
+  if(darktable.bauhaus->lr_layout)
+  {
+    // single row: just some breathing room around the text
+    *minimum_height += 2.0f * INNER_PADDING;
+  }
+  else if(w->type == DT_BAUHAUS_SLIDER)
   {
     // the lower thing to draw is indicator. See _draw_baseline for compute details
     *minimum_height += INNER_PADDING
@@ -3552,13 +3742,17 @@ static void _widget_button_press(GtkGestureSingle *gesture,
   }
 
   const float width = _widget_width(w);
-  const float pos = (x - w->margin.left - w->padding.left) / width;
+  const float full_pos = (x - w->margin.left - w->padding.left) / width;
+  float track_x = 0.0f, track_w = width;
+  const float pos = w->type == DT_BAUHAUS_SLIDER
+    ? _slider_pos_from_x(w, x, &track_x, &track_w) : full_pos;
+  const gboolean lr = darktable.bauhaus->lr_layout && w->type == DT_BAUHAUS_SLIDER;
 
   const guint button = gtk_gesture_single_get_current_button(gesture);
 
   if(w->quad_paint
      && !passthrough_from_histogram
-     && pos > 1.0f + INNER_PADDING / width)
+     && full_pos > 1.0f + INNER_PADDING / width)
   {
     dt_bauhaus_widget_press_quad(widget);
   }
@@ -3589,8 +3783,31 @@ static void _widget_button_press(GtkGestureSingle *gesture,
   {
     dt_bauhaus_slider_data_t *d = &w->slider;
     d->is_dragging = -1;
+    const float margin = bh->marker_size / track_w;
     if(!dt_modifier_eq(gesture, 0) || passthrough_from_histogram)
       bh->mouse_x = x;
+    else if(lr && pos > 1.0f + margin)
+    {
+      // click on the value: type a new one, like in Lightroom
+      d->is_dragging = 0;
+      GdkEvent *const event = gtk_get_current_event();
+      bh->opentime = gdk_event_get_time(event);
+      gdk_event_free(event);
+      bh->mouse_x = x;
+      bh->mouse_y = y;
+      _popup_show(widget);
+    }
+    else if(lr && pos < -margin)
+    {
+      // drag on the label: relative, fine-grained adjustment
+      bh->mouse_x = x;
+    }
+    else if(lr)
+    {
+      bh->mouse_x = NAN;
+      w->slider.timeout_handle = G_MAXUINT;
+      _slider_set_normalized(w, CLAMP(pos, 0.0f, 1.0f));
+    }
     else if(pos <= 1.0f && y > .5 * bh->line_height + w->margin.top + w->padding.top)
     {
       bh->mouse_x = NAN;
@@ -3635,8 +3852,11 @@ static void _widget_motion(GtkEventControllerMotion *controller,
   dt_bauhaus_slider_data_t *d = &w->slider;
   dt_bauhaus_t *bh = darktable.bauhaus;
 
-  const float width = _widget_width(w);
-  const float pos = (x - w->margin.left - w->padding.left) / width;
+  float width = _widget_width(w);
+  const float full_pos = (x - w->margin.left - w->padding.left) / width;
+  float track_x = 0.0f;
+  const float pos = w->type == DT_BAUHAUS_SLIDER
+    ? _slider_pos_from_x(w, x, &track_x, &width) : full_pos;
 
   if(w->type == DT_BAUHAUS_COMBOBOX)
   {
@@ -3669,7 +3889,7 @@ static void _widget_motion(GtkEventControllerMotion *controller,
   }
   else
   {
-    darktable.control->element = pos > 1.0f && w->quad_paint ? DT_ACTION_ELEMENT_BUTTON
+    darktable.control->element = full_pos > 1.0f && w->quad_paint ? DT_ACTION_ELEMENT_BUTTON
                                : pos > 0.1f && pos < 0.9f    ? DT_ACTION_ELEMENT_VALUE
                                                              : DT_ACTION_ELEMENT_FORCE;
   }
@@ -3704,6 +3924,9 @@ static void dt_bh_init(DtBauhausWidget *w)
   w->field = NULL;
   w->label = NULL;
   w->section = NULL;
+  w->display_label = NULL;
+  w->lr_label_w = -1.0f;
+  w->lr_value_w = -1.0f;
 
   // no quad icon and no toggle button:
   w->quad_paint = 0;

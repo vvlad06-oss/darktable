@@ -95,6 +95,7 @@ typedef struct dt_lib_modulegroups_basic_item_t
 
   GtkWidget *box;
   dt_iop_module_t *module;
+  gchar *display_label; // Lightroom-style label shown in the Basic panel
 } dt_lib_modulegroups_basic_item_t;
 
 typedef struct dt_lib_modulegroups_group_t
@@ -143,6 +144,7 @@ typedef struct dt_lib_modulegroups_t
   GList *basics;
   GtkWidget *vbox_basic;
   GtkWidget *mod_vbox_basic;
+  gboolean lr_reordered; // modules are shown in Lightroom panel order
 
   dt_iop_module_t *force_show_module;
 } dt_lib_modulegroups_t;
@@ -330,6 +332,7 @@ static void _basics_free_item(dt_lib_modulegroups_basic_item_t *item)
   g_free(item->module_op);
   if(item->tooltip) g_free(item->tooltip);
   g_free(item->widget_name);
+  g_free(item->display_label);
 }
 
 static void _basics_remove_widget(dt_lib_modulegroups_basic_item_t *item)
@@ -369,7 +372,10 @@ static void _basics_remove_widget(dt_lib_modulegroups_basic_item_t *item)
     }
     // put back label
     if(DT_IS_BAUHAUS_WIDGET(item->widget))
+    {
       dt_bauhaus_widget_set_show_extended_label(item->widget, FALSE);
+      dt_bauhaus_widget_set_display_label(item->widget, NULL);
+    }
   }
   // cleanup item
   item->widget = NULL;
@@ -731,6 +737,126 @@ _basics_add_items_from_module_widget(dt_lib_module_t *self, dt_iop_module_t *mod
   return item_pos;
 }
 
+
+static gboolean _lightroom_ui(void)
+{
+  return dt_conf_get_bool("plugins/darkroom/lightroom_ui");
+}
+
+// find, in the widget tree of a module, the widget whose action id is `id'
+static GtkWidget *_basics_find_widget(dt_iop_module_t *module,
+                                      GtkWidget *w,
+                                      const char *id)
+{
+  if(!w) return NULL;
+
+  dt_action_t *ac = module->so->actions.target;
+  while(ac)
+  {
+    if(ac->type >= DT_ACTION_TYPE_WIDGET && ac->target == w)
+    {
+      gchar *action_id = _action_id(ac);
+      const gboolean found = !g_strcmp0(action_id, id);
+      g_free(action_id);
+      if(found) return w;
+    }
+
+    if(ac->type == DT_ACTION_TYPE_SECTION)
+      ac = ac->target;
+    else if(!ac->next && ac->owner->type == DT_ACTION_TYPE_SECTION)
+      ac = ac->owner->next;
+    else
+      ac = ac->next;
+  }
+
+  GtkWidget *found = NULL;
+  if(GTK_IS_CONTAINER(w))
+  {
+    GList *children = gtk_container_get_children(GTK_CONTAINER(w));
+    for(const GList *l = children; l && !found; l = g_list_next(l))
+      found = _basics_find_widget(module, l->data, id);
+    g_list_free(children);
+  }
+  return found;
+}
+
+static dt_iop_module_t *_basics_lr_module(const char *op)
+{
+  for(GList *m = darktable.develop->iop; m; m = g_list_next(m))
+  {
+    dt_iop_module_t *module = m->data;
+    if(!g_strcmp0(module->op, op)
+       && !dt_iop_is_hidden(module)
+       && !(module->flags() & IOP_FLAGS_DEPRECATED)
+       && module->iop_order != INT_MAX)
+      return module;
+  }
+  return NULL;
+}
+
+// Lightroom Classic "Basic" panel: the quick access widgets, in the order
+// of the preset, under section titles, with Lightroom names.
+static void _basics_show_lr(dt_lib_module_t *self)
+{
+  dt_lib_modulegroups_t *d = self->data;
+
+  gtk_widget_set_name(d->vbox_basic, "basics-box-lightroom");
+
+  GtkWidget *header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+  gtk_widget_set_name(header, "basics-lr-header");
+  GtkWidget *title = gtk_label_new(_("Basic"));
+  gtk_widget_set_name(title, "basics-lr-title");
+  gtk_label_set_xalign(GTK_LABEL(title), 1.0);
+  gtk_box_pack_start(GTK_BOX(header), title, TRUE, TRUE, 0);
+  GtkWidget *arrow = dtgtk_button_new(dtgtk_cairo_paint_solid_arrow, CPF_DIRECTION_DOWN, NULL);
+  gtk_widget_set_name(arrow, "basics-lr-arrow");
+  gtk_widget_set_can_focus(arrow, FALSE);
+  dt_gui_add_class(arrow, "dt_transparent_background");
+  gtk_box_pack_start(GTK_BOX(header), arrow, FALSE, FALSE, 0);
+  gtk_box_pack_start(GTK_BOX(d->vbox_basic), header, FALSE, FALSE, 0);
+  gtk_widget_show_all(header);
+
+  d->mod_vbox_basic = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  gtk_widget_set_name(d->mod_vbox_basic, "basics-lr-body");
+  dt_gui_add_class(d->mod_vbox_basic, "dt_plugin_ui_main");
+  gtk_box_pack_start(GTK_BOX(d->vbox_basic), d->mod_vbox_basic, FALSE, FALSE, 0);
+  gtk_widget_show(d->mod_vbox_basic);
+
+  for(const GList *l = d->basics; l; l = g_list_next(l))
+  {
+    dt_lib_modulegroups_basic_item_t *item = l->data;
+    if(!item->id) continue;
+
+    if(item->id[0] == '#')
+    {
+      if(item->id[1])
+      {
+        GtkWidget *sect = dt_ui_section_label_new(item->id + 1);
+        gtk_widget_set_name(sect, "basics-lr-section");
+        gtk_label_set_xalign(GTK_LABEL(sect), 0.0);
+        gtk_box_pack_start(GTK_BOX(d->mod_vbox_basic), sect, FALSE, FALSE, 0);
+        gtk_widget_show(sect);
+      }
+      continue;
+    }
+    if(item->widget_type == WIDGET_TYPE_ACTIVATE_BTN || item->module) continue;
+
+    dt_iop_module_t *module = _basics_lr_module(item->module_op);
+    if(!module) continue;
+    GtkWidget *w = _basics_find_widget(module, module->widget, item->id);
+    if(!w) continue;
+
+    item->module = module;
+    _basics_add_widget(self, item, w, NORMAL);
+    if(item->widget && DT_IS_BAUHAUS_WIDGET(item->widget))
+    {
+      dt_bauhaus_widget_set_show_extended_label(item->widget, FALSE);
+      if(item->display_label)
+        dt_bauhaus_widget_set_display_label(item->widget, item->display_label);
+    }
+  }
+}
+
 static void _basics_show(dt_lib_module_t *self)
 {
   dt_lib_modulegroups_t *d = self->data;
@@ -747,6 +873,16 @@ static void _basics_show(dt_lib_module_t *self)
   else
     gtk_widget_set_name(d->vbox_basic, "basics-box");
   dt_gui_add_class(d->vbox_basic,"dt_plugin_ui");
+
+  if(_lightroom_ui())
+  {
+    _basics_show_lr(self);
+    gtk_box_reorder_child(dt_ui_get_container(darktable.gui->ui,
+                                              DT_UI_CONTAINER_PANEL_RIGHT_CENTER),
+                          d->vbox_basic, 0);
+    gtk_widget_show(d->vbox_basic);
+    return;
+  }
 
   dt_lib_modulegroups_basic_item_position_t item_pos = FIRST_MODULE;
   for(GList *modules = g_list_last(darktable.develop->iop); modules; modules = g_list_previous(modules))
@@ -809,6 +945,12 @@ static void _lib_modulegroups_update_iop_visibility(dt_lib_module_t *self)
   // we hide eventual basic panel
   if(d->current == DT_MODULEGROUP_BASICS && !d->basics_show) d->current = DT_MODULEGROUP_ACTIVE_PIPE;
   _basics_hide(self);
+
+  if(d->lr_reordered)
+  {
+    dt_dev_reorder_gui_module_list(darktable.develop);
+    d->lr_reordered = FALSE;
+  }
 
   // if we have a module to force or still have none selected, set d-current to active pipe
   if(d->current == DT_MODULEGROUP_INVALID || d->current == DT_MODULEGROUP_NONE)
@@ -916,7 +1058,10 @@ static void _lib_modulegroups_update_iop_visibility(dt_lib_module_t *self)
       {
         case DT_MODULEGROUP_BASICS:
         {
-          show_module = FALSE;
+          // Lightroom: the Basic panel is followed by the other panels
+          show_module = _lightroom_ui()
+                        && _lib_modulegroups_test_internal(self, 1, module)
+                        && (!(module->flags() & IOP_FLAGS_DEPRECATED) || module->enabled);
         }
         break;
 
@@ -965,7 +1110,26 @@ static void _lib_modulegroups_update_iop_visibility(dt_lib_module_t *self)
   }
 
   // we show eventual basic panel but only if no text in the search box
-  if(d->current == DT_MODULEGROUP_BASICS && !(text_entered && text_entered[0] != '\0')) _basics_show(self);
+  if(d->current == DT_MODULEGROUP_BASICS && !(text_entered && text_entered[0] != '\0'))
+  {
+    _basics_show(self);
+
+    // Lightroom: panels in the order of the first group, below Basic
+    dt_lib_modulegroups_group_t *gr = g_list_nth_data(d->groups, 0);
+    if(_lightroom_ui() && gr)
+    {
+      GtkBox *panel = dt_ui_get_container(darktable.gui->ui, DT_UI_CONTAINER_PANEL_RIGHT_CENTER);
+      int pos = 1;
+      for(const GList *op = gr->modules; op; op = g_list_next(op))
+        for(const GList *m = g_list_last(darktable.develop->iop); m; m = g_list_previous(m))
+        {
+          dt_iop_module_t *module = m->data;
+          if(module->expander && !g_strcmp0(module->op, op->data))
+            gtk_box_reorder_child(panel, module->expander, pos++);
+        }
+      d->lr_reordered = TRUE;
+    }
+  }
 }
 
 static void _lib_modulegroups_toggle(GtkWidget *button, dt_lib_module_t *self)
@@ -1346,7 +1510,10 @@ static gchar *_preset_to_string(dt_lib_module_t *self, gboolean edition)
   for(const GList *l = basics; l; l = g_list_next(l))
   {
     dt_lib_modulegroups_basic_item_t *item = l->data;
-    dt_util_str_cat(&res, "|%s", item->id);
+    if(item->display_label)
+      dt_util_str_cat(&res, "|%s=%s", item->id, item->display_label);
+    else
+      dt_util_str_cat(&res, "|%s", item->id);
   }
 
   for(const GList *l = groups; l; l = g_list_next(l))
@@ -1403,7 +1570,16 @@ static void _preset_from_string(dt_lib_module_t *self, gchar *txt, gboolean edit
         dt_lib_modulegroups_basic_item_t *item = g_malloc0(sizeof(dt_lib_modulegroups_basic_item_t));
         if(!item)
           continue;
-        item->id = g_strdup(gr2[j]);
+        // "op/widget=Label" gives the widget a Lightroom-style label,
+        // "#Title" starts a section in the Basic panel
+        gchar *eq = gr2[j][0] != '#' ? strchr(gr2[j], '=') : NULL;
+        if(eq)
+        {
+          item->id = g_strndup(gr2[j], eq - gr2[j]);
+          item->display_label = g_strdup(eq + 1);
+        }
+        else
+          item->id = g_strdup(gr2[j]);
         _basics_init_item(item);
 
         if(edition)
@@ -1800,6 +1976,98 @@ void init_presets(dt_lib_module_t *self)
   // search only (only active modules visible)
   SNQA();
   dt_lib_presets_add(_("search only"),
+                     self->plugin_name, self->version(), tx, strlen(tx), TRUE, 0);
+
+  // Lightroom Classic: a Basic panel built from the quick access widgets,
+  // followed by the other panels in Lightroom order (first group)
+  g_free(tx);
+  tx = g_strdup("1|0ꬹ1||");
+  // white balance
+  AM("channelmixerrgb/illuminant=WB");
+  AM("channelmixerrgb/temperature=Temp");
+  AM("channelmixerrgb/hue=Tint");
+  // tone
+  AM("#Tone");
+  AM("exposure/exposure=Exposure");
+  if(wf_filmic)
+    AM("filmicrgb/contrast=Contrast");
+  else if(wf_agx)
+    AM("agx/curve/contrast=Contrast");
+  else
+    AM("sigmoid/contrast=Contrast");
+  AM("shadhi/highlights=Highlights");
+  AM("shadhi/shadows=Shadows");
+  AM("colorbalancergb/gain/luminance=Whites");
+  AM("exposure/black level correction=Blacks");
+  // presence
+  AM("#Presence");
+  AM("bilat/detail=Clarity");
+  AM("hazeremoval/strength=Dehaze");
+  AM("colorbalancergb/global vibrance=Vibrance");
+  AM("colorbalancergb/global saturation=Saturation");
+
+  SMG(C_("modulegroup", "Develop"), "basic");
+  AM("rgbcurve");
+  AM("colorequal");
+  AM("colorbalancergb");
+  AM("sharpen");
+  AM("denoiseprofile");
+  AM("lens");
+  AM("cacorrectrgb");
+  AM("ashift");
+  AM("crop");
+  AM("retouch");
+  AM("vignette");
+  AM("grain");
+  AM("primaries");
+
+  SMG(C_("modulegroup", "Tone"), "tone");
+  AM("exposure");
+  if(wf_filmic) AM("filmicrgb");
+  else if(wf_agx) AM("agx");
+  else AM("sigmoid");
+  AM("toneequal");
+  AM("shadhi");
+  AM("bilat");
+  AM("hazeremoval");
+  AM("highlights");
+  AM("rgblevels");
+  AM("rgbcurve");
+
+  SMG(C_("modulegroup", "Color"), "color");
+  AM("channelmixerrgb");
+  AM("temperature");
+  AM("colorequal");
+  AM("colorbalancergb");
+  AM("colorzones");
+  AM("primaries");
+  AM("monochrome");
+  AM("splittoning");
+
+  SMG(C_("modulegroup", "Detail & Optics"), "correct");
+  AM("sharpen");
+  AM("diffuse");
+  AM("denoiseprofile");
+  AM("lens");
+  AM("cacorrectrgb");
+  AM("hotpixels");
+  AM("ashift");
+  AM("crop");
+  AM("flip");
+  AM("retouch");
+  AM("liquify");
+
+  SMG(C_("modulegroup", "Effects"), "effect");
+  AM("vignette");
+  AM("grain");
+  AM("graduatednd");
+  AM("bloom");
+  AM("soften");
+  AM("blurs");
+  AM("borders");
+  AM("watermark");
+
+  dt_lib_presets_add("Lightroom Classic",
                      self->plugin_name, self->version(), tx, strlen(tx), TRUE, 0);
 
   // There is no need for the deprecated modules group now, as there have been

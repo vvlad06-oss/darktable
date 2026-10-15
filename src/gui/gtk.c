@@ -1441,6 +1441,20 @@ int dt_gui_theme_init(dt_gui_gtk_t *gui)
   if(!gui->ui)
     gui->ui = g_malloc0(sizeof(dt_ui_t));
 
+  // first start of the Lightroom Classic edition: switch an existing
+  // configuration to the Lightroom theme and panel layout, once
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui")
+     && !dt_conf_get_bool("plugins/darkroom/lightroom_ui_initialized"))
+  {
+    dt_conf_set_string("ui_last/theme", "darktable-lightroom");
+    dt_conf_set_bool("themes/usercss", FALSE);
+    dt_conf_set_string("plugins/darkroom/modulegroups_preset", "Lightroom Classic");
+    dt_conf_set_int("plugins/darkroom/groups", 9999); // DT_MODULEGROUP_BASICS
+    dt_conf_set_string("darkroom/ui/hide_header_buttons", "active");
+    dt_conf_set_string("ui_last/gui_language", "en@lightroom"); // after a restart
+    dt_conf_set_bool("plugins/darkroom/lightroom_ui_initialized", TRUE);
+  }
+
   const char *css_theme = dt_conf_get_string_const("ui_last/theme");
   if(css_theme)
   {
