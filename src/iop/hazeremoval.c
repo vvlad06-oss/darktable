@@ -259,6 +259,17 @@ void gui_changed(dt_iop_module_t *self,
   }
 }
 
+void init(dt_iop_module_t *self)
+{
+  dt_iop_default_init(self);
+  // Lightroom Classic layout: Dehaze starts at 0
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui"))
+  {
+    dt_iop_hazeremoval_params_t *d = self->default_params;
+    d->strength = 0.0f;
+  }
+}
+
 void gui_init(dt_iop_module_t *self)
 {
   dt_iop_hazeremoval_gui_data_t *g = IOP_GUI_ALLOC(hazeremoval);

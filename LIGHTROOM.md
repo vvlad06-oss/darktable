@@ -21,14 +21,19 @@ Fiecare push pe `lightroom-ui` construiește automat un .dmg nou (workflow `.git
 | Temă | `darktable-lightroom` (griuri mate), implicită | `data/themes/darktable-lightroom.css` |
 | Nume | Library / Develop, Tone Curve, Color Grading, Virtual Copies, Keywording, Masking… | `po/en@lightroom.po` (generat de `tools/lightroom/make_po.py`) |
 | Scurtături | G, E, C, N, D, R, Q, Shift+W, X, 6–9, J, Z, F, \\, Ctrl+', Ctrl+Shift+E/I/R | `data/shortcutsrc.lightroom` |
+| Bara de unelte | sub histogramă: Crop, Remove (Spot Removal), Transform, Masking | `src/libs/modulegroups.c` |
+| Masking | Brush, Linear Gradient, Radial Gradient, Select Object (AI): creează o ajustare locală (Exposure cu mască) afișată sus în coloana Develop, cu unealta de desenat deja activă | `src/libs/modulegroups.c` |
+| Color Grading | roți Shadows / Midtones / Highlights / Global (nuanță + intensitate), dublu-click = reset | `src/iop/colorbalancergb.c` |
+| Copy… / Paste | jos în panoul stâng; Copy… deschide dialogul cu setările deja bifate | `src/libs/lr_copy_paste.c`, `src/gui/hist_dialog.c` |
+| Previous / Reset | jos în panoul drept; Previous = setările pozei editate anterior, Reset = setări implicite (Ctrl+Z le aduce înapoi) | `src/libs/lr_previous_reset.c` |
+| Valori pornire | Shadows, Highlights, Clarity, Dehaze pornesc de la 0, ca în Lightroom; Clarity e -100…+100 | `src/iop/shadhi.c`, `bilat.c`, `hazeremoval.c` |
 | Setări | rotița mouse-ului derulează panourile; totul se poate opri din preferences (darkroom → „Lightroom Classic layout”, misc → „Lightroom-style sliders”) | `data/darktableconfig.xml.in`, `src/gui/gtk.c` |
 
-## Ce urmează
+## Ce nu are echivalent (deocamdată)
 
-- bara de unelte sub histogramă (Crop, Spot Removal, Masking)
-- roți de culoare în Color Grading
-- Tone Curve parametrică (Highlights / Lights / Darks / Shadows)
-- butoane Copy… / Paste și Previous / Reset
+- Tone Curve parametrică (Highlights / Lights / Darks / Shadows): Tone Curve are curba pe puncte și canale R/G/B; varianta parametrică ar cere un modul nou de procesare.
+- Generative Remove, Lens Blur, Panorama Merge, măști automate Sky / People. (HDR Merge există: Library → panoul Selected Images → „Create HDR”.)
+- AI Denoise: există „Enhance (AI)” când build-ul are AI; altfel Noise Reduction clasic.
 
 ## Build de test pe Linux (pentru dezvoltare)
 

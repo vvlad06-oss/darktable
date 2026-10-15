@@ -1059,11 +1059,13 @@ GList *dt_history_get_items(const dt_imgid_t imgid,
   sqlite3_stmt *stmt;
 
   gchar *query = g_strdup_printf
-    ("SELECT num, operation, enabled, multi_name, blendop_params,"
+    ("SELECT MAX(num) AS num, operation, enabled, multi_name, blendop_params,"
      "       multi_name_hand_edited"
      " FROM main.history"
      " WHERE imgid=?1"
      "   AND enabled in (1, ?2)"
+     // MAX(num): the other columns come from the latest entry of each
+     // module instance, not from an arbitrary one
      " GROUP BY operation || multi_name, multi_priority"
      " ORDER BY %s DESC, %s DESC",
      multi_priority_order ? "multi_priority" : "num",

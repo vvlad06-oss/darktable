@@ -1443,17 +1443,15 @@ int dt_gui_theme_init(dt_gui_gtk_t *gui)
     gui->ui = g_malloc0(sizeof(dt_ui_t));
 
   // first start of the Lightroom Classic edition: switch an existing
-  // configuration to the Lightroom theme and panel layout, once
+  // configuration to the Lightroom theme, names and shortcuts, once.
+  // only darktablerc-common is loaded at this point, so the panel layout
+  // keys are set up later, in dt_init
   if(dt_conf_get_bool("plugins/darkroom/lightroom_ui")
-     && !dt_conf_get_bool("plugins/darkroom/lightroom_ui_initialized"))
+     && !dt_conf_get_bool("ui_last/lightroom_theme_initialized"))
   {
     dt_conf_set_string("ui_last/theme", "darktable-lightroom");
     dt_conf_set_bool("themes/usercss", FALSE);
-    dt_conf_set_string("plugins/darkroom/modulegroups_preset", "Lightroom Classic");
-    dt_conf_set_int("plugins/darkroom/groups", 9999); // DT_MODULEGROUP_BASICS
-    dt_conf_set_string("darkroom/ui/hide_header_buttons", "active");
     dt_conf_set_string("ui_last/gui_language", "en@lightroom"); // after a restart
-    dt_conf_set_bool("darkroom/ui/sidebar_scroll_default", TRUE); // wheel scrolls panels
     // let the Lightroom shortcuts apply: keep the previous ones as a backup
     char lr_configdir[PATH_MAX] = { 0 };
     dt_loc_get_user_config_dir(lr_configdir, sizeof(lr_configdir));
@@ -1463,7 +1461,7 @@ int dt_gui_theme_init(dt_gui_gtk_t *gui)
       g_rename(rc, bak);
     g_free(rc);
     g_free(bak);
-    dt_conf_set_bool("plugins/darkroom/lightroom_ui_initialized", TRUE);
+    dt_conf_set_bool("ui_last/lightroom_theme_initialized", TRUE);
   }
 
   const char *css_theme = dt_conf_get_string_const("ui_last/theme");

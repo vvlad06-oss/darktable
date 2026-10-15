@@ -426,6 +426,17 @@ void gui_update(dt_iop_module_t *self)
   gui_changed(self, NULL, NULL);
 }
 
+void init(dt_iop_module_t *self)
+{
+  dt_iop_default_init(self);
+  // Lightroom Classic layout: Clarity (local contrast detail) starts at 0
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui"))
+  {
+    dt_iop_bilat_params_t *d = self->default_params;
+    d->detail = 0.0f;
+  }
+}
+
 void gui_init(dt_iop_module_t *self)
 {
   // init the slider (more sophisticated layouts are possible with gtk tables and boxes):
@@ -439,8 +450,12 @@ void gui_init(dt_iop_module_t *self)
        " edges for extreme settings."));
 
   g->detail = dt_bauhaus_slider_from_params(self, N_("detail"));
-  dt_bauhaus_slider_set_offset(g->detail, 100);
+  // Lightroom shows Clarity as -100..+100 around 0
+  dt_bauhaus_slider_set_offset(g->detail,
+                               dt_conf_get_bool("plugins/darkroom/lightroom_ui") ? 0 : 100);
   dt_bauhaus_slider_set_format(g->detail, "%");
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui"))
+    dt_bauhaus_slider_set_soft_range(g->detail, -1.0f, 1.0f); // -100..+100, 0 centred
   gtk_widget_set_tooltip_text(g->detail, _("changes the local contrast"));
 
   ++darktable.bauhaus->skip_accel;

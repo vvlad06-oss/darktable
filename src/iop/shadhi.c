@@ -672,12 +672,32 @@ void cleanup_global(dt_iop_module_so_t *self)
   self->data = NULL;
 }
 
+void init(dt_iop_module_t *self)
+{
+  dt_iop_default_init(self);
+  // Lightroom Classic layout: Shadows and Highlights start at 0, like in
+  // Lightroom, instead of +50 / -50 (only matters when the module is
+  // switched on or reset; existing edits keep their values)
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui"))
+  {
+    dt_iop_shadhi_params_t *d = self->default_params;
+    d->shadows = 0.0f;
+    d->highlights = 0.0f;
+  }
+}
+
 void gui_init(dt_iop_module_t *self)
 {
   dt_iop_shadhi_gui_data_t *g = IOP_GUI_ALLOC(shadhi);
 
   g->shadows = dt_bauhaus_slider_from_params(self, N_("shadows"));
   g->highlights = dt_bauhaus_slider_from_params(self, N_("highlights"));
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui"))
+  {
+    // whole numbers, like Lightroom
+    dt_bauhaus_slider_set_digits(g->shadows, 0);
+    dt_bauhaus_slider_set_digits(g->highlights, 0);
+  }
   g->whitepoint = dt_bauhaus_slider_from_params(self, "whitepoint");
   g->shadhi_algo = dt_bauhaus_combobox_from_params(self, "shadhi_algo");
   g->radius = dt_bauhaus_slider_from_params(self, N_("radius"));

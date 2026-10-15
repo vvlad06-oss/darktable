@@ -330,6 +330,7 @@ int dt_gui_hist_dialog_new(dt_history_copy_item_t *d,
     dt_draw_paint_to_pixbuf(GTK_WIDGET(dialog), 10, 0, dtgtk_cairo_paint_showmask);
 
   /* fill list with history items */
+  const gboolean lr_copy = dt_conf_get_bool("plugins/darkroom/lightroom_ui");
   GList *items = dt_history_get_items(imgid, FALSE, TRUE, TRUE);
   if(items)
   {
@@ -340,8 +341,11 @@ int dt_gui_hist_dialog_new(dt_history_copy_item_t *d,
 
       if(!(flags & IOP_FLAGS_HIDDEN))
       {
+        // Lightroom "Copy Settings": everything that is safe to copy
+        // between photos is checked already
+        const gboolean precheck = iscopy && lr_copy && !dt_history_module_skip_copy(flags);
         gtk_list_store_insert_with_values(liststore, NULL, -1,
-           DT_HIST_ITEMS_COL_ENABLED, iscopy ? FALSE : _gui_is_set(d->selops, item->num),
+           DT_HIST_ITEMS_COL_ENABLED, iscopy ? precheck : _gui_is_set(d->selops, item->num),
            DT_HIST_ITEMS_COL_AUTOINIT, FALSE,
            DT_HIST_ITEMS_COL_ISACTIVE, item->enabled ? is_active_pb : is_inactive_pb,
            DT_HIST_ITEMS_COL_NAME, item->name,

@@ -1705,6 +1705,18 @@ int dt_init(int argc,
 
   g_slist_free_full(config_override, g_free);
 
+  // first start of the Lightroom Classic edition with this library:
+  // switch the darkroom to the Lightroom panel layout, once
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui")
+     && !dt_conf_get_bool("plugins/darkroom/lightroom_ui_initialized"))
+  {
+    dt_conf_set_string("plugins/darkroom/modulegroups_preset", "Lightroom Classic");
+    dt_conf_set_int("plugins/darkroom/groups", 9999); // DT_MODULEGROUP_BASICS
+    dt_conf_set_string("darkroom/ui/hide_header_buttons", "active");
+    dt_conf_set_bool("darkroom/ui/sidebar_scroll_default", TRUE); // wheel scrolls panels
+    dt_conf_set_bool("plugins/darkroom/lightroom_ui_initialized", TRUE);
+  }
+
   if(has_workspace)
   {
     // restore dbname & label (as set in call dt_workspace_create) to

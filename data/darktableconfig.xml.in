@@ -1611,7 +1611,7 @@
     <shortdescription>display of individual color channels</shortdescription>
     <longdescription>defines how color channels are displayed when activated in the parametric masks feature.</longdescription>
   </dtconfig>
-  <dtconfig prefs="darkroom" section="general" restart="true">
+  <dtconfig prefs="darkroom" section="general" restart="true" common="yes">
     <name>plugins/darkroom/lightroom_ui</name>
     <type>bool</type>
     <default>true</default>
@@ -1623,6 +1623,13 @@
     <type>bool</type>
     <default>false</default>
     <shortdescription>Lightroom Classic layout has been set up once</shortdescription>
+    <longdescription/>
+  </dtconfig>
+  <dtconfig common="yes">
+    <name>ui_last/lightroom_theme_initialized</name>
+    <type>bool</type>
+    <default>false</default>
+    <shortdescription>Lightroom Classic theme and language have been set up once</shortdescription>
     <longdescription/>
   </dtconfig>
   <dtconfig prefs="darkroom" section="general">

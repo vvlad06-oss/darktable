@@ -352,3 +352,33 @@ notebook tab:checked
 {
   margin: 0.3em 0 0.6em 0;
 }
+
+/* Copy... / Paste and Previous / Reset at the bottom of the side panels */
+#lr-bottom-buttons
+{
+  padding: 0.5em 0.6em;
+  border-top: 1px solid #1a1a1a;
+  background-color: #262626;
+}
+
+#lr-bottom-buttons button
+{
+  margin: 0 0.25em;
+  padding: 0.2em 0.6em;
+  min-height: 1.5em;
+  border-radius: 3px;
+  border: 1px solid #1c1c1c;
+  background-color: #4a4a4a;
+  color: #e0e0e0;
+}
+
+#lr-bottom-buttons button:hover
+{
+  background-color: #5a5a5a;
+}
+
+#lr-bottom-buttons button:disabled
+{
+  color: #7a7a7a;
+  background-color: #3a3a3a;
+}
