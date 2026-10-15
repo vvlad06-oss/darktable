@@ -1448,11 +1448,11 @@ static void _lr_export_preset_activated(GtkListBox *box,
   if(preset) dt_lib_presets_apply(preset, self->plugin_name, self->version());
 }
 
-static GtkWidget *_lr_export_presets_list(dt_lib_module_t *self)
+static void _lr_export_presets_fill(GtkWidget *list, dt_lib_module_t *self)
 {
-  GtkWidget *list = gtk_list_box_new();
-  gtk_list_box_set_selection_mode(GTK_LIST_BOX(list), GTK_SELECTION_SINGLE);
-  gtk_list_box_set_activate_on_single_click(GTK_LIST_BOX(list), TRUE);
+  GList *rows = gtk_container_get_children(GTK_CONTAINER(list));
+  for(GList *r = rows; r; r = g_list_next(r)) gtk_widget_destroy(GTK_WIDGET(r->data));
+  g_list_free(rows);
 
   sqlite3_stmt *stmt;
   DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),
@@ -1475,9 +1475,45 @@ static GtkWidget *_lr_export_presets_list(dt_lib_module_t *self)
     gtk_list_box_insert(GTK_LIST_BOX(list), row, -1);
   }
   sqlite3_finalize(stmt);
+  gtk_widget_show_all(list);
+}
 
+static GtkWidget *_lr_export_presets_list(dt_lib_module_t *self)
+{
+  GtkWidget *list = gtk_list_box_new();
+  gtk_list_box_set_selection_mode(GTK_LIST_BOX(list), GTK_SELECTION_SINGLE);
+  gtk_list_box_set_activate_on_single_click(GTK_LIST_BOX(list), TRUE);
+  GtkWidget *empty = gtk_label_new(_("no presets yet:\nset up the export on the right,\nthen click Add..."));
+  gtk_label_set_justify(GTK_LABEL(empty), GTK_JUSTIFY_CENTER);
+  gtk_widget_set_name(empty, "lr-export-no-presets");
+  gtk_widget_show(empty);
+  gtk_list_box_set_placeholder(GTK_LIST_BOX(list), empty);
+  _lr_export_presets_fill(list, self);
   g_signal_connect(list, "row-activated", G_CALLBACK(_lr_export_preset_activated), self);
   return list;
+}
+
+// Lightroom "Add": save the current settings as a new export preset
+static void _lr_export_preset_add(GtkButton *button, dt_lib_module_t *self)
+{
+  GtkWidget *list = g_object_get_data(G_OBJECT(button), "presets");
+  gchar *name = dt_gui_show_standalone_string_dialog(_("New Preset"),
+                                                     _("name of the export preset"),
+                                                     _("preset name"),
+                                                     _("Cancel"), _("Create"));
+  if(name && *name)
+  {
+    int size = 0;
+    void *params = get_params(self, &size);
+    if(params)
+    {
+      dt_lib_presets_add(name, self->plugin_name, self->version(), params, size, FALSE, 0);
+      free(params);
+      _lr_export_presets_fill(list, self);
+      dt_control_log(_("export preset `%s' saved"), name);
+    }
+  }
+  g_free(name);
 }
 
 static void _lr_export_dialog(dt_lib_module_t *self)
@@ -1511,10 +1547,15 @@ static void _lr_export_dialog(dt_lib_module_t *self)
 
   // presets on the left
   GtkWidget *presets = _lr_export_presets_list(self);
+  GtkWidget *add = gtk_button_new_with_label(_("Add..."));
+  gtk_widget_set_tooltip_text(add, _("save the current export settings as a preset"));
+  g_object_set_data(G_OBJECT(add), "presets", presets);
+  g_signal_connect(add, "clicked", G_CALLBACK(_lr_export_preset_add), self);
   GtkWidget *left = dt_gui_vbox(dt_ui_section_label_new(_("Preset")),
-                                dt_gui_expand(dt_gui_scroll_wrap(presets)));
+                                dt_gui_expand(dt_gui_scroll_wrap(presets)), add);
   gtk_widget_set_name(left, "lr-export-presets");
   gtk_widget_set_size_request(left, DT_PIXEL_APPLY_DPI(220), -1);
+  gtk_widget_set_hexpand(left, FALSE);
 
   // the settings of the module on the right, without its own button
   GtkWidget *settings = self->widget;
