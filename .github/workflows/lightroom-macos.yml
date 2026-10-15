@@ -1,0 +1,93 @@
+name: Lightroom UI macOS build
+
+# Builds the "lightroom-ui" branch for Apple Silicon and publishes the .dmg
+# as a GitHub release, so it can be downloaded and installed directly.
+
+on:
+  push:
+    branches: [ lightroom-ui ]
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: lightroom-macos
+  cancel-in-progress: true
+
+jobs:
+  macOS:
+    name: darktable (Lightroom UI) macOS arm64
+    runs-on: macos-15
+    timeout-minutes: 180
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      CC: cc
+      CXX: c++
+      MACOSX_DEPLOYMENT_TARGET: 15.0
+      SRC_DIR: ${{ github.workspace }}/src
+      BUILD_DIR: ${{ github.workspace }}/src/build
+      INSTALL_PREFIX: ${{ github.workspace }}/src/build/macosx
+      ECO: -DBINARY_PACKAGE_BUILD=ON -DUSE_GRAPHICSMAGICK=ON -DUSE_IMAGEMAGICK=OFF
+      CMAKE_BUILD_TYPE: Release
+      GENERATOR: Ninja
+      TARGET: skiptest
+    steps:
+      - name: Checkout branch
+        run: |
+          git clone -b ${{ github.ref_name }} https://github.com/${{ github.repository }} src
+          cd src
+          # the fork has no release tags; fetch the base release tag so the
+          # version string and the dmg name come out right
+          git fetch https://github.com/darktable-org/darktable.git \
+            refs/tags/release-5.6.2:refs/tags/release-5.6.2
+          git submodule init
+          git config submodule.src/tests/integration.update none
+          git config submodule.src/external/lua-scripts.update none
+          git submodule update
+      - name: Install dependencies
+        run: |
+          brew untap --force aws/tap || true
+          brew update > /dev/null || true
+          cd src/.ci
+          export HOMEBREW_NO_INSTALL_UPGRADE=1
+          brew bundle --verbose || true
+          export HOMEBREW_NO_INSTALL_FROM_API=1
+          brew developer on
+          gm_formula=`brew edit --quiet --print-path graphicsmagick`
+          sed 's/--with-modules/--disable-installed/1' "$gm_formula" > gm_formula.tmp
+          mv gm_formula.tmp "$gm_formula"
+          brew reinstall --build-from-source --force --quiet graphicsmagick
+      - name: Build and install
+        run: |
+          cmake -E make_directory "${BUILD_DIR}"
+          cmake -E make_directory "${INSTALL_PREFIX}"
+          ./src/.ci/ci-script.sh
+      - name: Build macOS app bundle
+        run: ./src/packaging/macosx/3_make_hb_darktable_package.sh
+      - name: Create DMG
+        run: ./src/packaging/macosx/4_make_hb_darktable_dmg.sh
+      - name: Collect DMG
+        run: |
+          cd "${INSTALL_PREFIX}"
+          DMG=$(ls darktable-*.dmg | head -1)
+          mv "$DMG" "${{ github.workspace }}/darktable-lightroom-ui-arm64.dmg"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ github.workspace }}/darktable-lightroom-ui-arm64.dmg
+          name: darktable-lightroom-ui-arm64
+          retention-days: 14
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="lightroom-build-${{ github.run_number }}"
+          gh release create "$TAG" "${{ github.workspace }}/darktable-lightroom-ui-arm64.dmg" \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "darktable Lightroom UI — build ${{ github.run_number }}" \
+            --notes "Apple Silicon (macOS 15+). Built from branch lightroom-ui at ${{ github.sha }}." \
+            --prerelease
