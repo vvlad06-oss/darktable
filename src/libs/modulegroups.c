@@ -738,6 +738,7 @@ _basics_add_items_from_module_widget(dt_lib_module_t *self, dt_iop_module_t *mod
 }
 
 
+
 static gboolean _lightroom_ui(void)
 {
   return dt_conf_get_bool("plugins/darkroom/lightroom_ui");

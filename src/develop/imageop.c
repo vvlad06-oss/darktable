@@ -348,6 +348,16 @@ int dt_iop_load_module_so(void *m, const char *libname, const char *module_name)
   return 0;
 }
 
+static guint _visibility_refresh_source = 0;
+
+static gboolean _refresh_module_visibility(gpointer data)
+{
+  _visibility_refresh_source = 0;
+  if(darktable.develop && darktable.develop->gui_attached)
+    dt_dev_modulegroups_update_visibility(darktable.develop);
+  return G_SOURCE_REMOVE;
+}
+
 gboolean dt_iop_load_module_by_so(dt_iop_module_t *module,
                                   dt_iop_module_so_t *so,
                                   dt_develop_t *dev)
@@ -415,6 +425,11 @@ gboolean dt_iop_load_module_by_so(dt_iop_module_t *module,
       if(dt_conf_get_bool(option)) state = IOP_STATE_FAVORITE;
     }
     dt_iop_gui_set_state(module, state);
+
+    // setting the state shows the module expanders; once loading settles,
+    // re-apply the visibility of the current module group
+    if(!_visibility_refresh_source)
+      _visibility_refresh_source = g_timeout_add(250, _refresh_module_visibility, NULL);
   }
 
   module->global_data = so->data;

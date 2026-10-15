@@ -1452,6 +1452,7 @@ int dt_gui_theme_init(dt_gui_gtk_t *gui)
     dt_conf_set_int("plugins/darkroom/groups", 9999); // DT_MODULEGROUP_BASICS
     dt_conf_set_string("darkroom/ui/hide_header_buttons", "active");
     dt_conf_set_string("ui_last/gui_language", "en@lightroom"); // after a restart
+    dt_conf_set_bool("darkroom/ui/sidebar_scroll_default", TRUE); // wheel scrolls panels
     dt_conf_set_bool("plugins/darkroom/lightroom_ui_initialized", TRUE);
   }
 
