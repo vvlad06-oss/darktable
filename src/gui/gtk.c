@@ -23,6 +23,7 @@
 #include "common/collection.h"
 #include "common/colorspaces.h"
 #include "common/file_location.h"
+#include <glib/gstdio.h>
 #include "common/l10n.h"
 #include "common/image.h"
 #include "common/gimp.h"
@@ -1453,6 +1454,15 @@ int dt_gui_theme_init(dt_gui_gtk_t *gui)
     dt_conf_set_string("darkroom/ui/hide_header_buttons", "active");
     dt_conf_set_string("ui_last/gui_language", "en@lightroom"); // after a restart
     dt_conf_set_bool("darkroom/ui/sidebar_scroll_default", TRUE); // wheel scrolls panels
+    // let the Lightroom shortcuts apply: keep the previous ones as a backup
+    char lr_configdir[PATH_MAX] = { 0 };
+    dt_loc_get_user_config_dir(lr_configdir, sizeof(lr_configdir));
+    gchar *rc = g_build_filename(lr_configdir, "shortcutsrc", NULL);
+    gchar *bak = g_build_filename(lr_configdir, "shortcutsrc.before-lightroom", NULL);
+    if(g_file_test(rc, G_FILE_TEST_EXISTS) && !g_file_test(bak, G_FILE_TEST_EXISTS))
+      g_rename(rc, bak);
+    g_free(rc);
+    g_free(bak);
     dt_conf_set_bool("plugins/darkroom/lightroom_ui_initialized", TRUE);
   }
 

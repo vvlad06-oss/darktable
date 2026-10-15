@@ -2067,6 +2067,17 @@ int dt_init(int argc,
     // all the default shortcuts have been registered
     darktable.control->accel_initialised = TRUE;
 
+    // Lightroom Classic edition: Lightroom keyboard shortcuts on top of
+    // darktable's defaults (they replace clashing defaults)
+    if(dt_conf_get_bool("plugins/darkroom/lightroom_ui"))
+    {
+      char lr_sharedir[PATH_MAX] = { 0 };
+      dt_loc_get_sharedir(lr_sharedir, sizeof(lr_sharedir));
+      gchar *lr_shortcuts = g_build_filename(lr_sharedir, "darktable", "shortcutsrc.lightroom", NULL);
+      dt_shortcuts_load(lr_shortcuts, FALSE);
+      g_free(lr_shortcuts);
+    }
+
     // Save the default shortcuts
     dt_shortcuts_save(".defaults", FALSE);
 
