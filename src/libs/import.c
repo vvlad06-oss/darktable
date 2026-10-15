@@ -56,7 +56,7 @@
 DT_MODULE(1)
 
 static void _import_from_dialog_new(dt_lib_module_t* self);
-static void _import_from_dialog_run(dt_lib_module_t* self);
+static gint _import_from_dialog_run(dt_lib_module_t* self);
 static void _import_from_dialog_free(dt_lib_module_t* self);
 static void _do_select_all(dt_lib_module_t* self);
 static void _do_select_none(dt_lib_module_t* self);
@@ -138,6 +138,10 @@ typedef struct dt_lib_import_t
   dt_import_metadata_t metadata;
   GtkBox *devices;
   dt_import_case_t import_case;
+  dt_import_case_t lr_next_case; // Lightroom: the mode chosen in the dialog
+  GtkWidget *lr_right;            // Lightroom: options column of the dialog
+  GtkWidget *lr_params_home;      // where the import parameters live outside the dialog
+  GtkWidget *lr_panel_buttons;    // darktable buttons, hidden in the Lightroom layout
   struct
   {
     GtkWidget *dialog;
@@ -193,9 +197,20 @@ dt_view_type_flags_t views(dt_lib_module_t *self)
   return DT_VIEW_LIGHTTABLE;
 }
 
+static gboolean _lr_ui(void)
+{
+  return dt_conf_get_bool("plugins/darkroom/lightroom_ui");
+}
+
 uint32_t container(dt_lib_module_t *self)
 {
-  return DT_UI_CONTAINER_PANEL_LEFT_CENTER;
+  // Lightroom: Import... and Export... at the bottom of the left panel
+  return _lr_ui() ? DT_UI_CONTAINER_PANEL_LEFT_BOTTOM : DT_UI_CONTAINER_PANEL_LEFT_CENTER;
+}
+
+gboolean expandable(dt_lib_module_t *self)
+{
+  return !_lr_ui();
 }
 
 int position(const dt_lib_module_t *self)
@@ -762,6 +777,12 @@ static void _import_add_file_callback(GObject *direnum,
 
       gtk_tree_sortable_set_sort_column_id(GTK_TREE_SORTABLE(d->from.store),
                                            DT_IMPORT_DATETIME, GTK_SORT_ASCENDING);
+      // Lightroom shows the photos to import as thumbnails
+      if(_lr_ui() && d->from.thumbs && d->import_case != DT_IMPORT_CAMERA)
+      {
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(d->from.thumbs), TRUE);
+        _show_all_thumbs(self);
+      }
     }
 
     return;
@@ -2009,17 +2030,80 @@ static void _set_expander_content(GtkWidget *rbox,
   gtk_box_pack_start(GTK_BOX(rbox), GTK_WIDGET(box), FALSE, FALSE, 0);
 }
 
+// Lightroom: the dialog is closed with this response to reopen it in the
+// other mode (Copy / Add)
+#define DT_LR_IMPORT_SWITCH 100
+
+static void _lr_import_mode_toggled(GtkToggleButton *button, dt_lib_module_t *self)
+{
+  if(!gtk_toggle_button_get_active(button)) return;
+  dt_lib_import_t *d = self->data;
+  const dt_import_case_t mode =
+    GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button), "import-case"));
+  if(mode == d->import_case) return;
+  d->lr_next_case = mode;
+  gtk_dialog_response(GTK_DIALOG(d->from.dialog), DT_LR_IMPORT_SWITCH);
+}
+
+static GtkWidget *_lr_import_mode_bar(dt_lib_module_t *self)
+{
+  dt_lib_import_t *d = self->data;
+
+  GtkWidget *copy = gtk_radio_button_new_with_label(NULL, _("Copy"));
+  GtkWidget *add = gtk_radio_button_new_with_label_from_widget(GTK_RADIO_BUTTON(copy), _("Add"));
+  g_object_set_data(G_OBJECT(copy), "import-case", GINT_TO_POINTER(DT_IMPORT_COPY));
+  g_object_set_data(G_OBJECT(add), "import-case", GINT_TO_POINTER(DT_IMPORT_INPLACE));
+  gtk_toggle_button_set_mode(GTK_TOGGLE_BUTTON(copy), FALSE);
+  gtk_toggle_button_set_mode(GTK_TOGGLE_BUTTON(add), FALSE);
+  gtk_widget_set_tooltip_text(copy, _("copy the photos to a new location (see Destination)\n"
+                                      "and add them to the library"));
+  gtk_widget_set_tooltip_text(add, _("add the photos to the library where they are,\n"
+                                     "without moving or copying them"));
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(d->import_case == DT_IMPORT_COPY ? copy : add),
+                               TRUE);
+  g_signal_connect(copy, "toggled", G_CALLBACK(_lr_import_mode_toggled), self);
+  g_signal_connect(add, "toggled", G_CALLBACK(_lr_import_mode_toggled), self);
+
+  GtkWidget *modes = dt_gui_hbox(copy, add);
+  gtk_widget_set_name(modes, "lr-import-modes");
+  gtk_widget_set_halign(modes, GTK_ALIGN_CENTER);
+
+  GtkWidget *desc = gtk_label_new(d->import_case == DT_IMPORT_COPY
+                                  ? _("Copy photos to a new location and add to library")
+                                  : _("Add photos to library without moving them"));
+  gtk_widget_set_name(desc, "lr-import-mode-description");
+  GtkWidget *bar = dt_gui_vbox(modes, desc);
+  gtk_widget_set_name(bar, "lr-import-header");
+  return bar;
+}
+
+static void _lr_import_params_in_dialog(dt_lib_module_t *self)
+{
+  dt_lib_import_t *d = self->data;
+  // "Apply During Import": the import parameters of the module, while the
+  // dialog is open
+  GtkWidget *params = GTK_WIDGET(d->cs.container);
+  d->lr_params_home = gtk_widget_get_parent(params);
+  if(!d->lr_params_home) return;
+  g_object_ref(params);
+  gtk_container_remove(GTK_CONTAINER(d->lr_params_home), params);
+  dt_gui_box_add(d->lr_right, dt_ui_section_label_new(_("Apply During Import")), params);
+  gtk_widget_show_all(params);
+}
+
 static void _import_from_dialog_new(dt_lib_module_t* self)
 {
   dt_lib_import_t *d = self->data;
   GtkWidget *win = dt_ui_main_window(darktable.gui->ui);
+  const gboolean lr = _lr_ui() && d->import_case != DT_IMPORT_CAMERA;
 
   d->from.dialog = gtk_dialog_new_with_buttons
-    (_(_import_text[d->import_case]), NULL,
+    (lr ? _("Import Photos") : _(_import_text[d->import_case]), NULL,
      GTK_DIALOG_MODAL,
-     _("_cancel"), GTK_RESPONSE_CANCEL,
-     _(_import_text[d->import_case]), GTK_RESPONSE_ACCEPT,
+     lr ? _("Cancel") : _("_cancel"), GTK_RESPONSE_CANCEL,
+     lr ? _("Import") : _(_import_text[d->import_case]), GTK_RESPONSE_ACCEPT,
      NULL);
+  if(lr) gtk_widget_set_name(d->from.dialog, "lr-import-dialog");
   gtk_dialog_set_default_response(GTK_DIALOG(d->from.dialog), GTK_RESPONSE_ACCEPT);
   dt_gui_dialog_add_help(GTK_DIALOG(d->from.dialog), "import_dialog");
 
@@ -2035,15 +2119,15 @@ static void _import_from_dialog_new(dt_lib_module_t* self)
   GtkWidget *box = dt_gui_container_first_child(GTK_CONTAINER(d->from.dialog));
   box = dt_gui_container_first_child(GTK_CONTAINER(box)); // action-box
 
-  d->select_all = gtk_button_new_with_label(_("select all"));
+  d->select_all = gtk_button_new_with_label(lr ? _("Check All") : _("select all"));
   gtk_box_pack_start(GTK_BOX(box), d->select_all, FALSE, FALSE, 2);
   g_signal_connect(d->select_all, "clicked", G_CALLBACK(_do_select_all_clicked), self);
 
-  d->select_none = gtk_button_new_with_label(_("select none"));
+  d->select_none = gtk_button_new_with_label(lr ? _("Uncheck All") : _("select none"));
   gtk_box_pack_start(GTK_BOX(box), d->select_none, FALSE, FALSE, 2);
   g_signal_connect(d->select_none, "clicked", G_CALLBACK(_do_select_none_clicked), self);
 
-  d->select_new = gtk_button_new_with_label(_("select new"));
+  d->select_new = gtk_button_new_with_label(lr ? _("Check New") : _("select new"));
   gtk_box_pack_start(GTK_BOX(box), d->select_new, FALSE, FALSE, 2);
   g_signal_connect(d->select_new, "clicked", G_CALLBACK(_do_select_new_clicked), self);
 
@@ -2058,7 +2142,22 @@ static void _import_from_dialog_new(dt_lib_module_t* self)
   // right pane
   GtkWidget *rbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
   gtk_paned_pack2(GTK_PANED(paned), rbox, TRUE, FALSE);
-  dt_gui_dialog_add(GTK_DIALOG(d->from.dialog), paned);
+  if(lr)
+  {
+    // Lightroom: Copy / Add on top, the options in a column on the right
+    dt_gui_dialog_add(GTK_DIALOG(d->from.dialog), _lr_import_mode_bar(self));
+    d->lr_right = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_widget_set_name(d->lr_right, "lr-import-options");
+    GtkWidget *right = dt_gui_scroll_wrap(d->lr_right);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(right), GTK_POLICY_NEVER,
+                                   GTK_POLICY_AUTOMATIC);
+    gtk_widget_set_size_request(right, DT_PIXEL_APPLY_DPI(300), -1);
+    gtk_widget_set_hexpand(paned, TRUE);
+    dt_gui_dialog_add(GTK_DIALOG(d->from.dialog), dt_gui_hbox(paned, right));
+    _lr_import_params_in_dialog(self);
+  }
+  else
+    dt_gui_dialog_add(GTK_DIALOG(d->from.dialog), paned);
 
   guint line = 0;
   guint col = 0;
@@ -2124,7 +2223,7 @@ static void _import_from_dialog_new(dt_lib_module_t* self)
   // patterns expander
   if(d->import_case != DT_IMPORT_INPLACE)
   {
-    _set_expander_content(rbox, self);
+    _set_expander_content(lr ? d->lr_right : rbox, self);
     gtk_widget_show_all(d->from.dialog);
     dt_gui_update_collapsible_section(&d->from.cs);
   }
@@ -2206,11 +2305,12 @@ static uint32_t _do_select_new(dt_lib_module_t* self)
   return count;
 }
 
-static void _import_from_dialog_run(dt_lib_module_t* self)
+static gint _import_from_dialog_run(dt_lib_module_t* self)
 {
   dt_lib_import_t *d = self->data;
 
-  while(gtk_dialog_run(GTK_DIALOG(d->from.dialog)) == GTK_RESPONSE_ACCEPT)
+  gint res;
+  while((res = gtk_dialog_run(GTK_DIALOG(d->from.dialog))) == GTK_RESPONSE_ACCEPT)
   {
     // reset filter so that view isn't empty
     dt_view_filtering_reset(darktable.view_manager, TRUE);
@@ -2283,6 +2383,7 @@ static void _import_from_dialog_run(dt_lib_module_t* self)
   }
 
   _import_cancel(self);
+  return res;
 }
 
 static void _import_from_dialog_free(dt_lib_module_t* self)
@@ -2296,6 +2397,16 @@ static void _import_from_dialog_free(dt_lib_module_t* self)
     GtkTreeModel *model = gtk_tree_view_get_model(d->from.folderview);
     g_object_unref(GTK_TREE_STORE(model));
   }
+  // Lightroom: the import parameters go back to the module
+  if(d->lr_params_home)
+  {
+    GtkWidget *params = GTK_WIDGET(d->cs.container);
+    gtk_container_remove(GTK_CONTAINER(gtk_widget_get_parent(params)), params);
+    gtk_container_add(GTK_CONTAINER(d->lr_params_home), params);
+    g_object_unref(params);
+    d->lr_params_home = NULL;
+  }
+  d->lr_right = NULL;
   // Destroy and quit
   gtk_widget_destroy(d->from.dialog);
 }
@@ -2340,6 +2451,51 @@ static void _lib_import_from_callback(GtkWidget *widget, dt_lib_module_t* self)
   // OK to resume periodic scans for new GPhoto2 devices
   camctl->import_ui = FALSE;
 #endif
+}
+
+/* Lightroom: one Import... dialog, Copy or Add chosen inside it */
+static dt_lib_module_t *_lr_import_module = NULL;
+
+static void _lr_import(dt_lib_module_t *self)
+{
+  dt_lib_import_t *d = self->data;
+  d->import_case = dt_conf_get_bool("ui_last/lr_import_copy")
+    ? DT_IMPORT_COPY : DT_IMPORT_INPLACE;
+#ifdef HAVE_GPHOTO2
+  struct dt_camctl_t *camctl = (dt_camctl_t *)darktable.camctl;
+  camctl->import_ui = TRUE;
+#endif
+  gint res;
+  do
+  {
+    _import_from_dialog_new(self);
+    res = _import_from_dialog_run(self);
+    _import_from_dialog_free(self);
+    if(res == DT_LR_IMPORT_SWITCH)
+    {
+      d->import_case = d->lr_next_case;
+      dt_conf_set_bool("ui_last/lr_import_copy", d->import_case == DT_IMPORT_COPY);
+    }
+  } while(res == DT_LR_IMPORT_SWITCH);
+#ifdef HAVE_GPHOTO2
+  camctl->import_ui = FALSE;
+#endif
+}
+
+static void _lr_import_clicked(GtkWidget *widget, dt_lib_module_t *self)
+{
+  _lr_import(self);
+}
+
+static void _lr_import_action(dt_action_t *action)
+{
+  if(_lr_import_module) _lr_import(_lr_import_module);
+}
+
+static void _lr_export_clicked(GtkWidget *widget, dt_lib_module_t *self)
+{
+  if(darktable.lib->proxy.export_dialog.dialog)
+    darktable.lib->proxy.export_dialog.dialog(darktable.lib->proxy.export_dialog.module);
 }
 
 #ifdef HAVE_GPHOTO2
@@ -2392,11 +2548,12 @@ void gui_init(dt_lib_module_t *self)
      _lib_import_from_callback, self,
      _("copy and optionally rename images before adding them to the library"
        "\npatterns can be defined to rename the images and specify the destination folders"),
-     GDK_KEY_i, GDK_CONTROL_MASK | GDK_SHIFT_MASK);
+     _lr_ui() ? 0 : GDK_KEY_i, _lr_ui() ? 0 : GDK_CONTROL_MASK | GDK_SHIFT_MASK);
   gtk_widget_set_can_focus(widget, TRUE);
   gtk_widget_set_receives_default(widget, TRUE);
 
-  self->widget = dt_gui_vbox(dt_gui_hbox(d->import_inplace, widget));
+  d->lr_panel_buttons = dt_gui_hbox(d->import_inplace, widget);
+  self->widget = dt_gui_vbox(d->lr_panel_buttons);
   
 #ifdef HAVE_GPHOTO2
   /* add devices container for cameras */
@@ -2440,11 +2597,38 @@ void gui_init(dt_lib_module_t *self)
   gtk_widget_set_no_show_all(self->widget, TRUE);
 
   dt_gui_update_collapsible_section(&d->cs);
+
+  if(_lr_ui())
+  {
+    // Lightroom: Import... and Export... at the bottom of the Library,
+    // the parameters move into the Import dialog
+    gtk_widget_set_no_show_all(d->lr_panel_buttons, TRUE);
+    gtk_widget_hide(d->lr_panel_buttons);
+    gtk_widget_set_no_show_all(d->cs.expander, TRUE);
+    gtk_widget_hide(d->cs.expander);
+
+    GtkWidget *import = gtk_button_new_with_label(_("Import..."));
+    gtk_widget_set_tooltip_text(import, _("import photos into the library"));
+    g_signal_connect(import, "clicked", G_CALLBACK(_lr_import_clicked), self);
+    GtkWidget *export = gtk_button_new_with_label(_("Export..."));
+    gtk_widget_set_tooltip_text(export, _("export the selected photos"));
+    g_signal_connect(export, "clicked", G_CALLBACK(_lr_export_clicked), self);
+    GtkWidget *buttons = dt_gui_hbox(import, export);
+    gtk_box_set_homogeneous(GTK_BOX(buttons), TRUE);
+    gtk_widget_set_name(buttons, "lr-bottom-buttons");
+    dt_gui_box_add(self->widget, buttons);
+    gtk_widget_show_all(buttons);
+  }
+
+  _lr_import_module = self;
+  dt_action_register(&darktable.control->actions_global, N_("Import..."),
+                     _lr_import_action, GDK_KEY_i, GDK_CONTROL_MASK | GDK_SHIFT_MASK);
 }
 
 void gui_cleanup(dt_lib_module_t *self)
 {
   dt_lib_import_t *d = self->data;
+  _lr_import_module = NULL;
 #ifdef USE_LUA
   detach_lua_widgets(d->extra_lua_widgets);
 #endif

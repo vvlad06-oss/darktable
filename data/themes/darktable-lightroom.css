@@ -391,3 +391,67 @@ notebook tab:checked
   padding: 0.25em 0.5em 0.35em 0.5em;
   background-color: #1e1e1e;
 }
+
+/* Import dialog: Copy / Add on top, like Lightroom */
+#lr-import-header
+{
+  padding: 0.6em 0 0.8em 0;
+  border-bottom: 1px solid #1a1a1a;
+  margin-bottom: 0.4em;
+}
+
+#lr-import-modes button
+{
+  min-width: 6em;
+  padding: 0.25em 1.2em;
+  font-size: 1.15em;
+  color: #8a8a8a;
+  background-color: transparent;
+  border: none;
+  border-radius: 0;
+}
+
+#lr-import-modes button:checked
+{
+  color: #ffffff;
+  border-bottom: 2px solid #c9c9c9;
+}
+
+#lr-import-modes button:hover
+{
+  color: #e0e0e0;
+}
+
+#lr-import-mode-description
+{
+  color: #8e8e8e;
+  font-size: 0.9em;
+  margin-top: 0.3em;
+}
+
+#lr-import-options
+{
+  padding: 0 0.6em;
+}
+
+/* Export dialog: presets on the left */
+#lr-export-presets
+{
+  border-right: 1px solid #1a1a1a;
+  padding-right: 0.6em;
+}
+
+#lr-export-presets row
+{
+  padding: 0.2em 0.4em;
+}
+
+#lr-export-presets row:selected
+{
+  background-color: #4a4a4a;
+}
+
+#lr-export-settings
+{
+  padding: 0 0.4em;
+}

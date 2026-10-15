@@ -147,7 +147,8 @@ typedef struct dt_lib_modulegroups_t
   GList *basics;
   GtkWidget *vbox_basic;
   GtkWidget *mod_vbox_basic;
-  GtkWidget *lr_basic_arrow; // disclosure triangle of the Lightroom Basic panel
+  GtkWidget *lr_basic_arrow;    // disclosure triangle of the Lightroom Basic panel
+  GtkWidget *lr_basic_revealer; // slides the Lightroom Basic panel open and closed
   gboolean lr_reordered; // modules are shown in Lightroom panel order
 
   dt_iop_module_t *force_show_module;
@@ -410,6 +411,7 @@ static void _basics_hide(dt_lib_module_t *self)
   gtk_widget_destroy(d->vbox_basic);
   d->vbox_basic = NULL;
   d->lr_basic_arrow = NULL;
+  d->lr_basic_revealer = NULL;
 }
 
 static gboolean _basics_goto_module(GtkWidget *w, GdkEventButton *e, gpointer user_data)
@@ -963,9 +965,9 @@ static dt_iop_module_t *_basics_lr_module(const char *op)
 static void _basics_lr_toggle(dt_lib_module_t *self)
 {
   dt_lib_modulegroups_t *d = self->data;
-  if(!d->mod_vbox_basic) return;
-  const gboolean collapse = gtk_widget_get_visible(d->mod_vbox_basic);
-  gtk_widget_set_visible(d->mod_vbox_basic, !collapse);
+  if(!d->lr_basic_revealer) return;
+  const gboolean collapse = gtk_revealer_get_reveal_child(GTK_REVEALER(d->lr_basic_revealer));
+  gtk_revealer_set_reveal_child(GTK_REVEALER(d->lr_basic_revealer), !collapse);
   dt_conf_set_bool("plugins/darkroom/lightroom_basic_collapsed", collapse);
   if(d->lr_basic_arrow)
   {
@@ -1021,9 +1023,18 @@ static void _basics_show_lr(dt_lib_module_t *self)
   d->mod_vbox_basic = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
   gtk_widget_set_name(d->mod_vbox_basic, "basics-lr-body");
   dt_gui_add_class(d->mod_vbox_basic, "dt_plugin_ui_main");
-  gtk_box_pack_start(GTK_BOX(d->vbox_basic), d->mod_vbox_basic, FALSE, FALSE, 0);
-  gtk_widget_set_no_show_all(d->mod_vbox_basic, TRUE);
-  gtk_widget_set_visible(d->mod_vbox_basic, !collapsed);
+  gtk_widget_show(d->mod_vbox_basic);
+
+  // the panel slides open and closed like the other panels
+  d->lr_basic_revealer = gtk_revealer_new();
+  gtk_revealer_set_transition_type(GTK_REVEALER(d->lr_basic_revealer),
+                                   GTK_REVEALER_TRANSITION_TYPE_SLIDE_DOWN);
+  gtk_revealer_set_transition_duration(GTK_REVEALER(d->lr_basic_revealer),
+                                       dt_conf_get_int("darkroom/ui/transition_duration"));
+  gtk_container_add(GTK_CONTAINER(d->lr_basic_revealer), d->mod_vbox_basic);
+  gtk_revealer_set_reveal_child(GTK_REVEALER(d->lr_basic_revealer), !collapsed);
+  gtk_box_pack_start(GTK_BOX(d->vbox_basic), d->lr_basic_revealer, FALSE, FALSE, 0);
+  gtk_widget_show(d->lr_basic_revealer);
 
   for(const GList *l = d->basics; l; l = g_list_next(l))
   {

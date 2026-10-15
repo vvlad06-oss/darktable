@@ -532,6 +532,70 @@ static void _view_paint_surface(cairo_t *cr,
   dt_pthread_mutex_unlock(&p->backbuf_mutex);
 }
 
+// Lightroom: while a photo loads, show its preview from the thumbnail cache
+// at the size it will have, with a small "Loading..." badge below it
+static void _lr_paint_loading(cairo_t *cr,
+                              const int32_t width,
+                              const int32_t height,
+                              const dt_develop_t *dev,
+                              const dt_dev_viewport_t *port)
+{
+  dt_gui_gtk_set_source_rgb(cr, DT_GUI_COLOR_DARKROOM_BG);
+  cairo_paint(cr);
+
+  const int border = port->border_size;
+  const int avail_w = width - 2 * border;
+  const int avail_h = height - 2 * border;
+  if(avail_w > 16 && avail_h > 16)
+  {
+    cairo_surface_t *surf = NULL;
+    const dt_view_surface_value_t res =
+      dt_view_image_get_surface(dev->image_storage.id, avail_w, avail_h, &surf, FALSE);
+    if(surf && (res == DT_VIEW_SURFACE_OK || res == DT_VIEW_SURFACE_SMALLER))
+    {
+      const int sw = cairo_image_surface_get_width(surf);
+      const int sh = cairo_image_surface_get_height(surf);
+      if(sw > 0 && sh > 0)
+      {
+        const double scale = fmin((double)avail_w / sw, (double)avail_h / sh);
+        cairo_save(cr);
+        cairo_translate(cr, (width - sw * scale) / 2.0, (height - sh * scale) / 2.0);
+        cairo_scale(cr, scale, scale);
+        cairo_set_source_surface(cr, surf, 0, 0);
+        cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
+        cairo_paint(cr);
+        cairo_restore(cr);
+      }
+    }
+    if(surf) cairo_surface_destroy(surf);
+  }
+
+  // the badge
+  PangoFontDescription *desc =
+    pango_font_description_copy_static(darktable.bauhaus->pango_font_desc);
+  pango_font_description_set_absolute_size(desc, DT_PIXEL_APPLY_DPI(12) * PANGO_SCALE);
+  PangoLayout *layout = pango_cairo_create_layout(cr);
+  pango_layout_set_font_description(layout, desc);
+  pango_layout_set_text(layout, _("Loading..."), -1);
+  PangoRectangle ink;
+  pango_layout_get_pixel_extents(layout, NULL, &ink);
+  const double pad_x = DT_PIXEL_APPLY_DPI(12), pad_y = DT_PIXEL_APPLY_DPI(5);
+  const double bw = ink.width + 2 * pad_x, bh = ink.height + 2 * pad_y;
+  const double bx = (width - bw) / 2.0, by = height - border - bh - DT_PIXEL_APPLY_DPI(16);
+  const double r = bh / 2.0;
+  cairo_new_sub_path(cr);
+  cairo_arc(cr, bx + bw - r, by + r, r, -M_PI / 2.0, M_PI / 2.0);
+  cairo_arc(cr, bx + r, by + r, r, M_PI / 2.0, 3.0 * M_PI / 2.0);
+  cairo_close_path(cr);
+  cairo_set_source_rgba(cr, 0.08, 0.08, 0.08, 0.78);
+  cairo_fill(cr);
+  cairo_move_to(cr, bx + pad_x, by + pad_y);
+  cairo_set_source_rgb(cr, 0.86, 0.86, 0.86);
+  pango_cairo_show_layout(cr, layout);
+  pango_font_description_free(desc);
+  g_object_unref(layout);
+}
+
 void expose(dt_view_t *self,
             cairo_t *cri,
             const int32_t width,
@@ -700,7 +764,11 @@ void expose(dt_view_t *self,
         load_txt = g_strdup(dev->image_storage.filename);
     }
 
-    if(use_loading_screen)
+    if(dt_conf_get_bool("plugins/darkroom/lightroom_ui") && !dev->image_invalid_cnt)
+    {
+      _lr_paint_loading(cri, width, height, dev, port);
+    }
+    else if(use_loading_screen)
     {
       dt_gui_gtk_set_source_rgb(cri, DT_GUI_COLOR_DARKROOM_BG);
       cairo_paint(cri);
@@ -2863,6 +2931,19 @@ static const dt_action_def_t _action_def_cycle_modules
 
 // cycle modules ends
 
+// Lightroom layout: keep the filter / sort bar hidden in Develop unless the
+// user shows it (also when darktable starts straight into Develop)
+static gboolean _lr_apply_top_toolbar(gpointer data)
+{
+  if(dt_view_get_current() != DT_VIEW_DARKROOM) return G_SOURCE_REMOVE;
+  gchar *key = g_strdup_printf("darkroom/ui/%d/toolbar_top_visible",
+                               dt_view_darkroom_get_layout(darktable.view_manager));
+  if(dt_conf_key_exists(key) && !dt_conf_get_bool(key))
+    dt_ui_panel_show(darktable.gui->ui, DT_UI_PANEL_CENTER_TOP, FALSE, FALSE);
+  g_free(key);
+  return G_SOURCE_REMOVE;
+}
+
 // Lightroom layout: a toolbar button that the Develop view does not show
 static void _lr_toolbar_hide(GtkWidget *w)
 {
@@ -3465,7 +3546,11 @@ void enter(dt_view_t *self)
 
   // Lightroom has no focus peaking button in Develop (ctrl+shift+f still works)
   if(dt_conf_get_bool("plugins/darkroom/lightroom_ui"))
+  {
     _lr_toolbar_hide(darktable.gui->focus_peaking_button);
+    _lr_apply_top_toolbar(NULL);
+    g_idle_add(_lr_apply_top_toolbar, NULL);
+  }
 
   // clean the undo list
   dt_undo_clear(darktable.undo, DT_UNDO_DEVELOP);

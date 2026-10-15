@@ -1046,6 +1046,41 @@
     <longdescription/>
   </dtconfig>
   <dtconfig>
+    <name>ui_last/lr_import_copy</name>
+    <type>bool</type>
+    <default>false</default>
+    <shortdescription>Lightroom import dialog: copy the photos instead of adding them</shortdescription>
+    <longdescription/>
+  </dtconfig>
+  <dtconfig>
+    <name>ui_last/lr_export_dialog_width</name>
+    <type>int</type>
+    <default>860</default>
+    <shortdescription/>
+    <longdescription/>
+  </dtconfig>
+  <dtconfig>
+    <name>ui_last/lr_export_dialog_height</name>
+    <type>int</type>
+    <default>640</default>
+    <shortdescription/>
+    <longdescription/>
+  </dtconfig>
+  <dtconfig>
+    <name>ui_last/lr_export_dialog_x</name>
+    <type>int</type>
+    <default>0</default>
+    <shortdescription/>
+    <longdescription/>
+  </dtconfig>
+  <dtconfig>
+    <name>ui_last/lr_export_dialog_y</name>
+    <type>int</type>
+    <default>0</default>
+    <shortdescription/>
+    <longdescription/>
+  </dtconfig>
+  <dtconfig>
     <name>ui_last/import_dialog_width</name>
     <type>int</type>
     <default>800</default>

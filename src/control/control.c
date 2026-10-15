@@ -485,6 +485,38 @@ gboolean dt_control_configure(GtkWidget *da,
 
 void dt_control_draw_busy_msg(cairo_t *cr, int width, int height)
 {
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui"))
+  {
+    // Lightroom: a small dark badge instead of the large outlined text
+    PangoFontDescription *desc =
+      pango_font_description_copy_static(darktable.bauhaus->pango_font_desc);
+    pango_font_description_set_absolute_size(desc, DT_PIXEL_APPLY_DPI(12) * PANGO_SCALE);
+    PangoLayout *layout = pango_cairo_create_layout(cr);
+    pango_layout_set_font_description(layout, desc);
+    pango_layout_set_text(layout, _("working..."), -1);
+    PangoRectangle logical;
+    pango_layout_get_pixel_extents(layout, NULL, &logical);
+    const double pad_x = DT_PIXEL_APPLY_DPI(12), pad_y = DT_PIXEL_APPLY_DPI(5);
+    const double bw = logical.width + 2 * pad_x, bh = logical.height + 2 * pad_y;
+    if(bw < width * 0.98)
+    {
+      const double bx = (width - bw) / 2.0, by = height * 0.85 - bh;
+      const double r = bh / 2.0;
+      cairo_new_sub_path(cr);
+      cairo_arc(cr, bx + bw - r, by + r, r, -M_PI / 2.0, M_PI / 2.0);
+      cairo_arc(cr, bx + r, by + r, r, M_PI / 2.0, 3.0 * M_PI / 2.0);
+      cairo_close_path(cr);
+      cairo_set_source_rgba(cr, 0.08, 0.08, 0.08, 0.78);
+      cairo_fill(cr);
+      cairo_move_to(cr, bx + pad_x, by + pad_y);
+      cairo_set_source_rgb(cr, 0.86, 0.86, 0.86);
+      pango_cairo_show_layout(cr, layout);
+    }
+    pango_font_description_free(desc);
+    g_object_unref(layout);
+    return;
+  }
+
   PangoRectangle ink;
   PangoLayout *layout;
   PangoFontDescription *desc =
@@ -530,7 +562,13 @@ void dt_control_expose(GtkWidget *widget, cairo_t *cr)
 
   // draw busy indicator
   dt_pthread_mutex_lock(&dc->log_mutex);
-  if(dc->busy > 0)
+  // (in the Lightroom layout the darkroom shows its own "Loading..." while
+  // a photo opens)
+  const gboolean lr_loading = dt_conf_get_bool("plugins/darkroom/lightroom_ui")
+    && dt_view_get_current() == DT_VIEW_DARKROOM
+    && darktable.develop && darktable.develop->preview_pipe
+    && darktable.develop->preview_pipe->output_imgid != darktable.develop->image_storage.id;
+  if(dc->busy > 0 && !lr_loading)
   {
     dt_control_draw_busy_msg(cr, dc->width, dc->height);
   }

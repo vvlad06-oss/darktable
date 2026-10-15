@@ -982,6 +982,21 @@ void gui_init(dt_lib_module_t *self)
     (eventbox_motion_controller, GTK_PHASE_BUBBLE);
 
   gtk_widget_show_all(self->widget);
+
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui"))
+  {
+    // the scope buttons only show while the pointer is over the scope
+    // (right after startup the vectorscope ones could stay visible)
+    for(dt_scopes_mode_type_t i = 0; i < DT_SCOPES_MODE_N; i++)
+      if(s->cur_mode != &s->modes[i])
+        dt_scopes_call_if_exists(&s->modes[i], mode_leave);
+    GtkWidget *boxes[] = { s->button_box_left, s->button_box_right, s->button_box_split };
+    for(int i = 0; i < G_N_ELEMENTS(boxes); i++)
+    {
+      gtk_widget_hide(boxes[i]);
+      gtk_widget_set_no_show_all(boxes[i], TRUE);
+    }
+  }
 }
 
 void gui_cleanup(dt_lib_module_t *self)

@@ -97,6 +97,13 @@ typedef struct dt_lib_t
     {
       gboolean enabled;
     } snapshots;
+
+    // Lightroom layout: the modal Export dialog of the export module
+    struct
+    {
+      struct dt_lib_module_t *module;
+      void (*dialog)(struct dt_lib_module_t *self);
+    } export_dialog;
   } proxy;
 } dt_lib_t;
 

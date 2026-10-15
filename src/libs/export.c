@@ -17,6 +17,7 @@
 */
 
 #include "bauhaus/bauhaus.h"
+#include "common/act_on.h"
 #include "common/collection.h"
 #include "common/colorspaces.h"
 #include "common/darktable.h"
@@ -38,6 +39,9 @@
 #include <ctype.h>
 
 #include <glib.h>
+#ifdef GDK_WINDOWING_QUARTZ
+#include "osx/osx.h"
+#endif
 
 DT_MODULE(8)
 
@@ -1431,6 +1435,139 @@ void set_preferences(void *menu, dt_lib_module_t *self)
   gtk_menu_shell_append(GTK_MENU_SHELL(menu), mi);
 }
 
+/* ---------------------------------------------------------------------------
+   Lightroom: the Export dialog. The settings of this module move into a
+   modal window, with the export presets on the left, and Export starts it.
+   ------------------------------------------------------------------------- */
+
+static void _lr_export_preset_activated(GtkListBox *box,
+                                        GtkListBoxRow *row,
+                                        dt_lib_module_t *self)
+{
+  const char *preset = row ? g_object_get_data(G_OBJECT(row), "preset") : NULL;
+  if(preset) dt_lib_presets_apply(preset, self->plugin_name, self->version());
+}
+
+static GtkWidget *_lr_export_presets_list(dt_lib_module_t *self)
+{
+  GtkWidget *list = gtk_list_box_new();
+  gtk_list_box_set_selection_mode(GTK_LIST_BOX(list), GTK_SELECTION_SINGLE);
+  gtk_list_box_set_activate_on_single_click(GTK_LIST_BOX(list), TRUE);
+
+  sqlite3_stmt *stmt;
+  DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),
+                              "SELECT name"
+                              " FROM data.presets"
+                              " WHERE operation = ?1 AND op_version = ?2"
+                              " ORDER BY writeprotect DESC, LOWER(name)",
+                              -1, &stmt, NULL);
+  DT_DEBUG_SQLITE3_BIND_TEXT(stmt, 1, self->plugin_name, -1, SQLITE_TRANSIENT);
+  DT_DEBUG_SQLITE3_BIND_INT(stmt, 2, self->version());
+  while(sqlite3_step(stmt) == SQLITE_ROW)
+  {
+    const char *name = (const char *)sqlite3_column_text(stmt, 0);
+    GtkWidget *label = gtk_label_new(dt_util_localize_string(name));
+    gtk_label_set_xalign(GTK_LABEL(label), 0.0);
+    gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_END);
+    GtkWidget *row = gtk_list_box_row_new();
+    gtk_container_add(GTK_CONTAINER(row), label);
+    g_object_set_data_full(G_OBJECT(row), "preset", g_strdup(name), g_free);
+    gtk_list_box_insert(GTK_LIST_BOX(list), row, -1);
+  }
+  sqlite3_finalize(stmt);
+
+  g_signal_connect(list, "row-activated", G_CALLBACK(_lr_export_preset_activated), self);
+  return list;
+}
+
+static void _lr_export_dialog(dt_lib_module_t *self)
+{
+  dt_lib_export_t *d = self->data;
+
+  const int count = dt_act_on_get_images_nb(TRUE, FALSE);
+  if(count < 1)
+  {
+    dt_control_log(_("select the photos to export first"));
+    return;
+  }
+
+  gchar *title = count == 1
+    ? g_strdup(_("Export One File"))
+    : g_strdup_printf(_("Export %d Files"), count);
+  GtkWidget *win = dt_ui_main_window(darktable.gui->ui);
+  GtkWidget *dialog = gtk_dialog_new_with_buttons(title, GTK_WINDOW(win),
+                                                  GTK_DIALOG_MODAL
+                                                  | GTK_DIALOG_DESTROY_WITH_PARENT,
+                                                  _("Cancel"), GTK_RESPONSE_CANCEL,
+                                                  _("Export"), GTK_RESPONSE_ACCEPT,
+                                                  NULL);
+  g_free(title);
+  gtk_widget_set_name(dialog, "lr-export-dialog");
+  gtk_dialog_set_default_response(GTK_DIALOG(dialog), GTK_RESPONSE_ACCEPT);
+#ifdef GDK_WINDOWING_QUARTZ
+  dt_osx_disallow_fullscreen(dialog);
+#endif
+  dt_gui_dialog_restore_size(GTK_DIALOG(dialog), "lr_export");
+
+  // presets on the left
+  GtkWidget *presets = _lr_export_presets_list(self);
+  GtkWidget *left = dt_gui_vbox(dt_ui_section_label_new(_("Preset")),
+                                dt_gui_expand(dt_gui_scroll_wrap(presets)));
+  gtk_widget_set_name(left, "lr-export-presets");
+  gtk_widget_set_size_request(left, DT_PIXEL_APPLY_DPI(220), -1);
+
+  // the settings of the module on the right, without its own button
+  GtkWidget *settings = self->widget;
+  GtkWidget *home = gtk_widget_get_parent(settings);
+  int home_pos = -1;
+  if(home && GTK_IS_BOX(home))
+    gtk_container_child_get(GTK_CONTAINER(home), settings, "position", &home_pos, NULL);
+  g_object_ref(settings);
+  if(home) gtk_container_remove(GTK_CONTAINER(home), settings);
+  gtk_widget_hide(GTK_WIDGET(d->export_button));
+
+  GtkWidget *scroll = gtk_scrolled_window_new(NULL, NULL);
+  gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),
+                                 GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+  gtk_container_add(GTK_CONTAINER(scroll), settings);
+  gtk_widget_set_hexpand(scroll, TRUE);
+  gtk_widget_set_vexpand(scroll, TRUE);
+  gtk_widget_set_name(scroll, "lr-export-settings");
+
+  GtkWidget *body = dt_gui_hbox(left, scroll);
+  gtk_box_set_spacing(GTK_BOX(body), DT_PIXEL_APPLY_DPI(12));
+  dt_gui_dialog_add(GTK_DIALOG(dialog), body);
+  gtk_widget_show_all(dialog);
+  gtk_widget_show(settings);
+
+  const gint res = gtk_dialog_run(GTK_DIALOG(dialog));
+
+  // the settings go back to the module
+  gtk_container_remove(GTK_CONTAINER(gtk_widget_get_parent(settings)), settings);
+  if(home)
+  {
+    if(GTK_IS_BOX(home))
+    {
+      gtk_box_pack_start(GTK_BOX(home), settings, TRUE, TRUE, 0);
+      if(home_pos >= 0) gtk_box_reorder_child(GTK_BOX(home), settings, home_pos);
+    }
+    else
+      gtk_container_add(GTK_CONTAINER(home), settings);
+  }
+  g_object_unref(settings);
+  gtk_widget_show(GTK_WIDGET(d->export_button));
+  gtk_widget_destroy(dialog);
+
+  if(res == GTK_RESPONSE_ACCEPT) _export_with_current_settings(self);
+}
+
+static void _lr_export_dialog_action(dt_action_t *action)
+{
+  dt_lib_module_t *self = darktable.lib->proxy.export_dialog.module;
+  if(self && darktable.lib->proxy.export_dialog.dialog)
+    darktable.lib->proxy.export_dialog.dialog(self);
+}
+
 void gui_init(dt_lib_module_t *self)
 {
   dt_lib_export_t *d = malloc(sizeof(dt_lib_export_t));
@@ -1815,11 +1952,20 @@ void gui_init(dt_lib_module_t *self)
   DT_CONTROL_SIGNAL_HANDLE(DT_SIGNAL_COLLECTION_CHANGED, _collection_updated_callback);
   DT_CONTROL_SIGNAL_HANDLE(DT_SIGNAL_IMAGEIO_STORAGE_EXPORT_ENABLE, _export_enable_callback);
   DT_CONTROL_SIGNAL_HANDLE(DT_SIGNAL_PRESETS_CHANGED, _export_presets_changed_callback);
+
+  // Lightroom: File > Export... as a dialog, from any view
+  darktable.lib->proxy.export_dialog.module = self;
+  darktable.lib->proxy.export_dialog.dialog = _lr_export_dialog;
+  dt_action_register(&darktable.control->actions_global, N_("Export..."),
+                     _lr_export_dialog_action, GDK_KEY_e, GDK_CONTROL_MASK | GDK_SHIFT_MASK);
 }
 
 void gui_cleanup(dt_lib_module_t *self)
 {
   dt_lib_export_t *d = self->data;
+
+  darktable.lib->proxy.export_dialog.module = NULL;
+  darktable.lib->proxy.export_dialog.dialog = NULL;
 
   for(const GList *it = darktable.imageio->plugins_storage; it; it = g_list_next(it))
   {

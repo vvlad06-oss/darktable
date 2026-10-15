@@ -36,6 +36,10 @@ Fiecare push pe `lightroom-ui` construiește automat un .dmg nou (workflow `.git
 | HSL / Color | slidere Red, Orange, Yellow, Green, Aqua, Blue, Purple, Magenta, vizibile implicit | `src/iop/colorequal.c` |
 | Histogramă | RGB liniară, cu ISO, mm, f/ și timpul de expunere dedesubt | `src/libs/histogram.c` |
 | Coloana dreaptă | fără taburi de grupuri și fără căutare (scurtătura „search modules” o aduce înapoi); antetul „Basic ▼” pliază panoul | `src/libs/modulegroups.c` |
+| Import | „Import...” jos în stânga în Library (și Cmd+Shift+I din orice view): dialog „Import Photos” cu Copy / Add sus, miniaturi, Check All / Uncheck All / Check New, iar în dreapta „Apply During Import” (rating, metadate) și, la Copy, destinația și redenumirea | `src/libs/import.c` |
+| Export | „Export...” lângă Import (și Cmd+Shift+E, inclusiv din Develop): dialog modal „Export N Files” cu presetările de export în stânga și toate setările de export în dreapta | `src/libs/export.c`, `src/libs/lib.h` |
+| Încărcare și animații | la deschiderea unei poze apare imediat miniatura ei, cu „Loading...” jos; „working...” e o etichetă mică; Basic se pliază cu animație; butoanele histogramei apar doar la hover | `src/views/darkroom.c`, `src/control/control.c`, `src/libs/modulegroups.c`, `src/libs/histogram.c` |
+| Panouri fără măști | panourile din coloana Develop nu mai arată rândul de măști darktable (ajustările locale din Masking îl păstrează) | `src/develop/blend_gui.c` |
 | Develop | fără bara Filter / Sort deasupra pozei (Preferences: meniul darktable); sub poză doar clipping, soft proofing, guides, second window; stânga fără Color Picker, Virtual Copies, Keywording, Info, Masking, Export; fără Module Order | `src/views/darkroom.c`, `src/common/darktable.c` (pasul 2 al configurării, `plugins/darkroom/lightroom_ui_version`) |
 
 ## Ce nu are echivalent (deocamdată)

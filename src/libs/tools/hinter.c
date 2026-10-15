@@ -90,7 +90,11 @@ void _lib_hinter_set_message(dt_lib_module_t *self, const char *message)
 {
   dt_lib_hinter_t *d = self->data;
 
-  if(message && !*message && !dt_ui_panel_visible(darktable.gui->ui, DT_UI_PANEL_CENTER_TOP))
+  // Lightroom shows no selection count above the photo in Develop
+  const gboolean lr_develop = dt_conf_get_bool("plugins/darkroom/lightroom_ui")
+                              && dt_view_get_current() == DT_VIEW_DARKROOM;
+  if(message && !*message && !lr_develop
+     && !dt_ui_panel_visible(darktable.gui->ui, DT_UI_PANEL_CENTER_TOP))
   {
     GtkWidget *count = dt_view_filter_get_count(darktable.view_manager);
     if(count)

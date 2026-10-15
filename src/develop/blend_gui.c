@@ -3326,7 +3326,15 @@ void dt_iop_gui_update_blending(dt_iop_module_t *module)
     _box_set_visible(bd->blendif_box, FALSE);
   }
 
-  gtk_widget_set_visible(GTK_WIDGET(bd->masks_modes_box), !module->hide_enable_button);
+  // Lightroom: the panels of the Develop column have no mask controls,
+  // unless a mask is already in use; the local adjustments keep them
+  const gboolean lr_panel = dt_conf_get_bool("plugins/darkroom/lightroom_ui")
+                            && module->multi_priority == 0
+                            && !(module->blend_params->mask_mode & DEVELOP_MASK_ENABLED)
+                            && dt_dev_modulegroups_test(darktable.develop, 1, module);
+  gtk_widget_set_visible(GTK_WIDGET(bd->masks_modes_box),
+                         !module->hide_enable_button && !lr_panel);
+  gtk_widget_set_no_show_all(GTK_WIDGET(bd->masks_modes_box), lr_panel);
 
   DT_LEAVE_GUI_UPDATE();
 }
