@@ -1751,7 +1751,9 @@ int dt_init(int argc,
 
   // step 3: shortcutsrc keeps the Lightroom shortcuts of earlier builds as
   // user shortcuts, which would hide the new ones (\ = Before / After,
-  // ctrl+shift+e / i = Export... / Import... dialogs): drop them, once
+  // ctrl+shift+e / i = Export... / Import... dialogs): drop them, once.
+  // On macOS the darktable default cmd+shift+i = copy & import is saved
+  // there too and would take cmd+shift+i away from Import...
   if(dt_conf_get_bool("plugins/darkroom/lightroom_ui")
      && dt_conf_get_int("plugins/darkroom/lightroom_ui_version") < 3)
   {
@@ -1759,6 +1761,8 @@ int dt_init(int argc,
       { "backslash=lib/snapshots/toggle last snapshot",
         "e;shift;ctrl=lib/export/start export",
         "i;shift;ctrl=lib/import/add to library...",
+        "i;shift;cmd=lib/import/copy & import...",
+        "i;shift;ctrl=lib/import/copy & import...",
         "disabled;lib/snapshots/toggle before and after",
         "disabled;global/Export...",
         "disabled;global/Import..." };

@@ -5,7 +5,7 @@ Proiect: darktable 5.6.2 modificat ca să arate și să se comporte ca Lightroom
 ## Ramuri
 
 - `lightroom-ui`: ramura principală; fiecare push construiește pe CI un DMG publicat ca prerelease `lightroom-build-N` (`.github/workflows/lightroom-macos.yml`, ~21 min). Ultimul: **build-8** (commit `b0d19b7598`).
-- `lightroom-ui-wip`: lucrul de după build-8 (Before/After, Tone Curve Region, Auto, Profile, migrarea scurtăturilor). Compilat fără avertismente și verificat cu un test automat, **dar netestat de mână și ne-mergeuit**. Pasul următor: test în aplicație → merge în `lightroom-ui` → build-9.
+- `lightroom-ui-wip`: lucrul de după build-8 (Before/After, Tone Curve Region, Auto, Profile, migrarea scurtăturilor). **Testat de mână pe 19 oct. 2026** pe o copie a configurației din build-6: `\` Before/After (și cu Profile + curbă + expunere), Auto (un singur Cmd+Z), Profile (listă, aplicare, Undo), Region (Shadows / Highlights, Undo), Cmd+Shift+E (Export, „Add...”), Cmd+Shift+I (Import, Copy ↔ Add). Reparat la test: pe macOS, scurtătura veche `cmd+shift+i = copy & import` din `shortcutsrc` lua Cmd+Shift+I de la Import...; pasul 3 al migrării o șterge acum. Pasul următor: merge în `lightroom-ui` → build-9.
 
 ## Ce e făcut (vezi și LIGHTROOM.md)
 
@@ -19,8 +19,8 @@ Proiect: darktable 5.6.2 modificat ca să arate și să se comporte ca Lightroom
 
 ## Ce mai e de făcut
 
-1. Test manual în aplicație pentru ce e pe `lightroom-ui-wip`: `\` (Before/After), Auto, Profile, Region; apoi merge în `lightroom-ui` și push → build-9.
-2. De verificat vizual: eticheta „Loading...” la schimbarea pozei; comutarea Copy → Add în dialogul de import; butonul „Add...” din dialogul de export.
+1. Merge `lightroom-ui-wip` în `lightroom-ui` și push → build-9.
+2. De verificat vizual: eticheta „Loading...” (cu o singură poză în cache se încarcă prea repede ca să se vadă); „Custom” la Profile după o schimbare manuală în modulul sigmoid. Detaliu: dialogul de import urcă puțin pe ecran la fiecare comutare Copy ↔ Add.
 3. Crash GTK la pornire văzut de 2 ori, doar cu ecranul blocat / imediat după deblocare (`gtk_css_node_validate`). Cu ecranul deblocat, 6 porniri la rând fără probleme. De urmărit.
 4. Neimplementat încă: animația panourilor laterale (Tab) — ar forța reprocesarea pozei la fiecare cadru; Profile pentru workflow-urile filmic / AgX (acum doar sigmoid); presetări Lightroom built-in pentru export.
 
