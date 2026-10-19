@@ -21,6 +21,7 @@
 #include "common/debug.h"
 #include "common/file_location.h"
 #include "common/history_snapshot.h"
+#include "common/utility.h"
 #include "control/conf.h"
 #include "control/control.h"
 #include "develop/develop.h"
@@ -29,6 +30,7 @@
 #include "gui/draw.h"
 #include "libs/lib.h"
 #include "libs/lib_api.h"
+#include <gdk/gdkkeysyms.h>
 
 DT_MODULE(1)
 
@@ -82,6 +84,11 @@ typedef struct dt_lib_snapshots_t
   gboolean rotsym_lightup;
 
   GtkWidget *take_button, *sidebyside_button;
+
+  // Lightroom Before / After: the photo before its edits, full view
+  gboolean lr_before, lr_before_requested;
+  guint lr_before_timeout_id;
+  dt_lib_snapshot_t lr_before_snap;
 } dt_lib_snapshots_t;
 
 /* callback for take snapshot */
@@ -209,6 +216,163 @@ static inline gboolean _get_rotation_area(dt_lib_module_t *self,
 }
 
 /* expose snapshot over center viewport */
+/* ---------------------------------------------------------------------------
+   Lightroom Before / After (\\): the photo before its edits, that is the
+   history up to the end of the first block written when it was opened for
+   the first time (default modules and auto-applied presets).
+   ------------------------------------------------------------------------- */
+
+static int _lr_before_history_end(void)
+{
+  dt_develop_t *dev = darktable.develop;
+  const dt_imgid_t imgid = dev->image_storage.id;
+  GHashTable *seen = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+  int end = 0;
+
+  sqlite3_stmt *stmt;
+  DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),
+                              "SELECT operation, multi_priority, multi_name"
+                              " FROM main.history"
+                              " WHERE imgid = ?1"
+                              " ORDER BY num",
+                              -1, &stmt, NULL);
+  DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, imgid);
+  while(sqlite3_step(stmt) == SQLITE_ROW)
+  {
+    const char *op = (const char *)sqlite3_column_text(stmt, 0);
+    const int priority = sqlite3_column_int(stmt, 1);
+    const char *name = (const char *)sqlite3_column_text(stmt, 2);
+    if(!op) break;
+
+    // auto-applied presets are named after the built-in preset
+    const gboolean auto_applied = name && g_str_has_prefix(name, BUILTIN_PREFIX);
+    gboolean default_module = FALSE;
+    for(const GList *m = dev->iop; m; m = g_list_next(m))
+    {
+      const dt_iop_module_t *module = m->data;
+      if(!g_strcmp0(module->op, op) && module->multi_priority == priority)
+      {
+        default_module = module->default_enabled;
+        break;
+      }
+    }
+
+    gchar *key = g_strdup_printf("%s:%d", op, priority);
+    // the first edit: a module seen again, or one the user switched on
+    if(g_hash_table_contains(seen, key) || !(auto_applied || default_module))
+    {
+      g_free(key);
+      break;
+    }
+    g_hash_table_add(seen, key);
+    end++;
+  }
+  sqlite3_finalize(stmt);
+  g_hash_table_destroy(seen);
+
+  return MIN(end, dev->history_end);
+}
+
+static gboolean _lr_before_expose_again(gpointer user_data)
+{
+  dt_lib_snapshots_t *d = user_data;
+  d->lr_before_timeout_id = 0;
+  d->lr_before_requested = TRUE;
+  dt_control_queue_redraw_center();
+  return G_SOURCE_REMOVE;
+}
+
+static void _lr_before_paint(dt_lib_snapshots_t *d,
+                             cairo_t *cr,
+                             const int32_t width,
+                             const int32_t height)
+{
+  dt_develop_t *dev = darktable.develop;
+  dt_lib_snapshot_t *snap = &d->lr_before_snap;
+  const dt_view_context_t ctx = dt_view_get_context_hash();
+
+  if(d->lr_before_requested && snap->ctx == ctx)
+  {
+    dt_free_align(snap->buf);
+    snap->buf = NULL;
+    dt_dev_image(snap->imgid, width, height, snap->history_end,
+                 &snap->buf, &snap->scale, &snap->width, &snap->height, snap->zoom_pos,
+                 -1, NULL, DT_DEVICE_NONE, FALSE);
+    d->lr_before_requested = FALSE;
+  }
+
+  // render again once the zoom or the size settles
+  if(snap->ctx != ctx || !snap->buf)
+  {
+    snap->ctx = ctx;
+    if(d->lr_before_timeout_id) g_source_remove(d->lr_before_timeout_id);
+    d->lr_before_timeout_id = g_timeout_add(150, _lr_before_expose_again, d);
+  }
+
+  dt_gui_gtk_set_source_rgb(cr, DT_GUI_COLOR_DARKROOM_BG);
+  cairo_rectangle(cr, 0, 0, width, height);
+  cairo_fill(cr);
+  if(snap->buf)
+    dt_view_paint_surface(cr, width, height, &dev->full, DT_WINDOW_MAIN,
+                          snap->buf, snap->scale, snap->width, snap->height, snap->zoom_pos);
+
+  // the "Before" badge
+  PangoFontDescription *desc =
+    pango_font_description_copy_static(darktable.bauhaus->pango_font_desc);
+  pango_font_description_set_absolute_size(desc, DT_PIXEL_APPLY_DPI(12) * PANGO_SCALE);
+  PangoLayout *layout = pango_cairo_create_layout(cr);
+  pango_layout_set_font_description(layout, desc);
+  pango_layout_set_text(layout, _("Before"), -1);
+  PangoRectangle logical;
+  pango_layout_get_pixel_extents(layout, NULL, &logical);
+  const double pad_x = DT_PIXEL_APPLY_DPI(12), pad_y = DT_PIXEL_APPLY_DPI(5);
+  const double bw = logical.width + 2 * pad_x, bh = logical.height + 2 * pad_y;
+  const double bx = (width - bw) / 2.0, by = DT_PIXEL_APPLY_DPI(14);
+  const double r = bh / 2.0;
+  cairo_new_sub_path(cr);
+  cairo_arc(cr, bx + bw - r, by + r, r, -M_PI / 2.0, M_PI / 2.0);
+  cairo_arc(cr, bx + r, by + r, r, M_PI / 2.0, 3.0 * M_PI / 2.0);
+  cairo_close_path(cr);
+  cairo_set_source_rgba(cr, 0.08, 0.08, 0.08, 0.78);
+  cairo_fill(cr);
+  cairo_move_to(cr, bx + pad_x, by + pad_y);
+  cairo_set_source_rgb(cr, 0.86, 0.86, 0.86);
+  pango_cairo_show_layout(cr, layout);
+  pango_font_description_free(desc);
+  g_object_unref(layout);
+}
+
+static void _lr_before_off(dt_lib_snapshots_t *d)
+{
+  d->lr_before = FALSE;
+  d->lr_before_requested = FALSE;
+  if(d->lr_before_timeout_id) g_source_remove(d->lr_before_timeout_id);
+  d->lr_before_timeout_id = 0;
+  dt_free_align(d->lr_before_snap.buf);
+  d->lr_before_snap.buf = NULL;
+  d->lr_before_snap.ctx = 0;
+}
+
+static void _lr_before_toggle(dt_action_t *action)
+{
+  dt_lib_snapshots_t *d = dt_action_lib(action)->data;
+  if(dt_view_get_current() != DT_VIEW_DARKROOM) return;
+
+  if(d->lr_before)
+    _lr_before_off(d);
+  else
+  {
+    // the history must be in the database to render the photo from it
+    dt_dev_write_history(darktable.develop);
+    d->lr_before = TRUE;
+    d->lr_before_snap.imgid = darktable.develop->image_storage.id;
+    d->lr_before_snap.history_end = _lr_before_history_end();
+    d->lr_before_snap.ctx = 0;
+    d->lr_before_requested = TRUE;
+  }
+  dt_control_queue_redraw_center();
+}
+
 void gui_post_expose(dt_lib_module_t *self,
                      cairo_t *cri,
                      const int32_t width,
@@ -218,6 +382,16 @@ void gui_post_expose(dt_lib_module_t *self,
 {
   dt_lib_snapshots_t *d = self->data;
   dt_develop_t *dev = darktable.develop;
+
+  if(d->lr_before)
+  {
+    if(d->lr_before_snap.imgid == dev->image_storage.id && !darktable.gui->drawing_snapshot)
+    {
+      _lr_before_paint(d, cri, width, height);
+      return;
+    }
+    _lr_before_off(d);
+  }
 
   if(d->sidebyside && (!darktable.gui->drawing_snapshot ^ !d->inverted))
     return;
@@ -876,6 +1050,8 @@ void gui_init(dt_lib_module_t *self)
 
   dt_action_register(DT_ACTION(self), N_("toggle last snapshot"),
                      _lib_snapshots_toggle_last, 0, 0);
+  dt_action_register(DT_ACTION(self), N_("toggle before and after"),
+                     _lr_before_toggle, GDK_KEY_backslash, 0);
 
   DT_CONTROL_SIGNAL_HANDLE(DT_SIGNAL_CONTROL_PROFILE_USER_CHANGED, _signal_profile_changed);
   DT_CONTROL_SIGNAL_HANDLE(DT_SIGNAL_DEVELOP_IMAGE_CHANGED, _signal_image_changed);
@@ -884,6 +1060,7 @@ void gui_init(dt_lib_module_t *self)
 
 void gui_cleanup(dt_lib_module_t *self)
 {
+  _lr_before_off(self->data);
   _clear_snapshots(self);
 
   g_free(self->data);

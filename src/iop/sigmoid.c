@@ -17,10 +17,13 @@
 */
 
 #include "bauhaus/bauhaus.h"
+#include "common/database.h"
+#include "common/debug.h"
 #include "common/custom_primaries.h"
 #include "common/math.h"
 #include "common/matrices.h"
 #include "common/dttypes.h"
+#include "common/utility.h"
 #include "develop/imageop.h"
 #include "develop/imageop_gui.h"
 #include "develop/openmp_maths.h"
@@ -178,7 +181,19 @@ typedef struct dt_iop_sigmoid_gui_data_t
   GtkWidget *color_processing_list, *hue_preservation_slider;
 
   dt_gui_collapsible_section_t display_luminance_section, primaries_section;
+
+  // Lightroom Basic panel: Profile = the presets of this module
+  GtkWidget *lr_profile;
+  GPtrArray *lr_profiles;
+  gboolean lr_applying; // a profile is being applied from the list
 } dt_iop_sigmoid_gui_data_t;
+
+typedef struct dt_iop_sigmoid_lr_profile_t
+{
+  gchar *name;
+  void *params;
+  int size;
+} dt_iop_sigmoid_lr_profile_t;
 
 typedef struct dt_iop_sigmoid_global_data_t
 {
@@ -861,10 +876,103 @@ void init_pipe(dt_iop_module_t *self, dt_dev_pixelpipe_t *pipe, dt_dev_pixelpipe
   piece->data = calloc(1, sizeof(dt_iop_sigmoid_data_t));
 }
 
+/* ---------------------------------------------------------------------------
+   Lightroom Profile: the look of the photo, chosen among the presets of the
+   tone mapper ("Custom" once its settings are changed by hand)
+   ------------------------------------------------------------------------- */
+
+static void _lr_profile_free(gpointer data)
+{
+  dt_iop_sigmoid_lr_profile_t *profile = data;
+  g_free(profile->name);
+  g_free(profile->params);
+  g_free(profile);
+}
+
+static void _lr_profile_fill(dt_iop_module_t *self)
+{
+  dt_iop_sigmoid_gui_data_t *g = self->gui_data;
+  g_ptr_array_set_size(g->lr_profiles, 0);
+
+  DT_ENTER_GUI_UPDATE();
+  dt_bauhaus_combobox_clear(g->lr_profile);
+
+  sqlite3_stmt *stmt;
+  DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),
+                              "SELECT name, op_params"
+                              " FROM data.presets"
+                              " WHERE operation = ?1 AND op_version = ?2"
+                              " ORDER BY writeprotect DESC, LOWER(name)",
+                              -1, &stmt, NULL);
+  DT_DEBUG_SQLITE3_BIND_TEXT(stmt, 1, self->op, -1, SQLITE_TRANSIENT);
+  DT_DEBUG_SQLITE3_BIND_INT(stmt, 2, self->version());
+  while(sqlite3_step(stmt) == SQLITE_ROW)
+  {
+    const char *name = (const char *)sqlite3_column_text(stmt, 0);
+    const int size = sqlite3_column_bytes(stmt, 1);
+    // a preset without parameters stands for the defaults of the module
+    if(!name || (size != 0 && size != self->params_size)) continue;
+    dt_iop_sigmoid_lr_profile_t *profile = g_malloc0(sizeof(dt_iop_sigmoid_lr_profile_t));
+    profile->name = g_strdup(name);
+    profile->size = self->params_size;
+    profile->params = g_malloc(self->params_size);
+    memcpy(profile->params, size ? sqlite3_column_blob(stmt, 1) : self->default_params,
+           self->params_size);
+    g_ptr_array_add(g->lr_profiles, profile);
+
+    // "_builtin_neutral gray" -> "Neutral gray"
+    const gboolean builtin = g_str_has_prefix(name, BUILTIN_PREFIX);
+    gchar *label = g_strdup(builtin ? _(name + strlen(BUILTIN_PREFIX))
+                                    : dt_util_localize_string(name));
+    if(label[0]) label[0] = g_ascii_toupper(label[0]);
+    dt_bauhaus_combobox_add(g->lr_profile, label);
+    g_free(label);
+  }
+  sqlite3_finalize(stmt);
+  dt_bauhaus_combobox_add(g->lr_profile, _("Custom"));
+  DT_LEAVE_GUI_UPDATE();
+}
+
+static void _lr_profile_update(dt_iop_module_t *self)
+{
+  dt_iop_sigmoid_gui_data_t *g = self->gui_data;
+  if(!g || !g->lr_profile) return;
+
+  int current = g->lr_profiles->len; // Custom
+  for(guint i = 0; i < g->lr_profiles->len; i++)
+  {
+    const dt_iop_sigmoid_lr_profile_t *profile = g_ptr_array_index(g->lr_profiles, i);
+    if(!memcmp(profile->params, self->params, self->params_size))
+    {
+      current = i;
+      break;
+    }
+  }
+  DT_ENTER_GUI_UPDATE();
+  dt_bauhaus_combobox_set(g->lr_profile, current);
+  DT_LEAVE_GUI_UPDATE();
+}
+
+static void _lr_profile_callback(GtkWidget *combo, dt_iop_module_t *self)
+{
+  DT_GUARD_GUI_UPDATE();
+  dt_iop_sigmoid_gui_data_t *g = self->gui_data;
+  const int pos = dt_bauhaus_combobox_get(combo);
+  if(pos < 0 || pos >= g->lr_profiles->len) return; // Custom: keep the settings
+  const dt_iop_sigmoid_lr_profile_t *profile = g_ptr_array_index(g->lr_profiles, pos);
+  memcpy(self->params, profile->params, self->params_size);
+  g->lr_applying = TRUE;
+  dt_iop_gui_update(self);
+  g->lr_applying = FALSE;
+  dt_dev_add_history_item(darktable.develop, self, TRUE);
+}
+
 void gui_changed(dt_iop_module_t *self, GtkWidget *w, void *previous)
 {
   const dt_iop_sigmoid_gui_data_t *g = self->gui_data;
   const dt_iop_sigmoid_params_t *p = self->params;
+
+  _lr_profile_update(self);
 
   if(!w || w == g->color_processing_list)
   {
@@ -878,6 +986,8 @@ void gui_update(dt_iop_module_t *self)
 {
   const dt_iop_sigmoid_gui_data_t *g = self->gui_data;
 
+  // presets may have been added (not while one is applied from the list)
+  if(g->lr_profile && !g->lr_applying) _lr_profile_fill(self);
   dt_gui_update_collapsible_section(&g->display_luminance_section);
   dt_gui_update_collapsible_section(&g->primaries_section);
 
@@ -972,6 +1082,25 @@ void gui_init(dt_iop_module_t *self)
                                         "can be used creatively for a faded look or blowing out whites earlier."));
 
   self->widget = main_box;
+
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui"))
+  {
+    g->lr_profiles = g_ptr_array_new_with_free_func(_lr_profile_free);
+    g->lr_profile = dt_bauhaus_combobox_new_action(DT_ACTION(self));
+    dt_bauhaus_widget_set_label(g->lr_profile, N_("lightroom"), N_("profile"));
+    gtk_widget_set_tooltip_text(g->lr_profile, _("the look of the photo: a preset of the tone mapper"));
+    g_signal_connect(G_OBJECT(g->lr_profile), "value-changed",
+                     G_CALLBACK(_lr_profile_callback), self);
+    dt_gui_box_add(main_box, g->lr_profile);
+    gtk_box_reorder_child(GTK_BOX(main_box), g->lr_profile, 0);
+    _lr_profile_fill(self);
+  }
+}
+
+void gui_cleanup(dt_iop_module_t *self)
+{
+  dt_iop_sigmoid_gui_data_t *g = self->gui_data;
+  if(g && g->lr_profiles) g_ptr_array_free(g->lr_profiles, TRUE);
 }
 
 

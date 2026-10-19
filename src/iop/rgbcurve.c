@@ -92,6 +92,7 @@ typedef struct dt_iop_rgbcurve_gui_data_t
   GtkWidget *cmb_preserve_colors;
   float zoom_factor;
   float offset_x, offset_y;
+  GtkWidget *lr_region[4]; // Lightroom parametric curve: shadows, darks, lights, highlights
 } dt_iop_rgbcurve_gui_data_t;
 
 typedef struct dt_iop_rgbcurve_data_t
@@ -1460,6 +1461,116 @@ void change_image(dt_iop_module_t *self)
   }
 }
 
+/* ---------------------------------------------------------------------------
+   Lightroom parametric Tone Curve: Shadows, Darks, Lights and Highlights
+   move the curve in the four quarters of the tones (middle gray in the
+   middle). The curve is a regular linked RGB curve with six nodes, so the
+   point editor above shows it and can still change it.
+   ------------------------------------------------------------------------- */
+
+#define LR_REGION_NODES 6
+#define LR_REGION_SHIFT 0.08f // largest move of a node, at -100 / +100
+
+static const float _lr_region_x[LR_REGION_NODES] = { 0.0f, 0.125f, 0.375f, 0.625f, 0.875f, 1.0f };
+
+static void _lr_region_to_params(dt_iop_module_t *self, const float region[4])
+{
+  dt_iop_rgbcurve_params_t *p = self->params;
+  const int ch = DT_IOP_RGBCURVE_R;
+  p->curve_num_nodes[ch] = LR_REGION_NODES;
+  for(int k = 0; k < LR_REGION_NODES; k++)
+  {
+    const float shift = (k > 0 && k < LR_REGION_NODES - 1)
+      ? LR_REGION_SHIFT * CLAMPF(region[k - 1], -100.0f, 100.0f) / 100.0f : 0.0f;
+    p->curve_nodes[ch][k].x = _lr_region_x[k];
+    p->curve_nodes[ch][k].y = CLAMPF(_lr_region_x[k] + shift, 0.0f, 1.0f);
+  }
+  p->curve_type[ch] = MONOTONE_HERMITE;
+  p->curve_autoscale = DT_S_SCALE_AUTOMATIC_RGB;
+  // quarters of the tones, not of the linear values
+  p->compensate_middle_grey = TRUE;
+  self->histogram_middle_grey = TRUE;
+}
+
+static void _lr_region_update(dt_iop_module_t *self)
+{
+  dt_iop_rgbcurve_gui_data_t *g = self->gui_data;
+  if(!g || !g->lr_region[0]) return;
+  const dt_iop_rgbcurve_params_t *p = self->params;
+  const int ch = DT_IOP_RGBCURVE_R;
+
+  float region[4] = { 0.0f };
+  gboolean parametric = self->enabled
+                        && p->curve_autoscale == DT_S_SCALE_AUTOMATIC_RGB
+                        && p->compensate_middle_grey
+                        && p->curve_num_nodes[ch] == LR_REGION_NODES;
+  for(int k = 0; parametric && k < LR_REGION_NODES; k++)
+    parametric = fabsf(p->curve_nodes[ch][k].x - _lr_region_x[k]) < 1e-4f;
+  if(parametric)
+    for(int i = 0; i < 4; i++)
+      region[i] = 100.0f * (p->curve_nodes[ch][i + 1].y - _lr_region_x[i + 1]) / LR_REGION_SHIFT;
+
+  DT_ENTER_GUI_UPDATE();
+  for(int i = 0; i < 4; i++)
+    dt_bauhaus_slider_set(g->lr_region[i], CLAMPF(region[i], -100.0f, 100.0f));
+  DT_LEAVE_GUI_UPDATE();
+}
+
+static void _lr_region_callback(GtkWidget *slider, dt_iop_module_t *self)
+{
+  DT_GUARD_GUI_UPDATE();
+  dt_iop_rgbcurve_gui_data_t *g = self->gui_data;
+  dt_iop_rgbcurve_params_t *p = self->params;
+
+  float region[4];
+  for(int i = 0; i < 4; i++) region[i] = dt_bauhaus_slider_get(g->lr_region[i]);
+  _lr_region_to_params(self, region);
+
+  DT_ENTER_GUI_UPDATE();
+  dt_bauhaus_combobox_set(g->autoscale, p->curve_autoscale);
+  dt_bauhaus_combobox_set(g->interpolator, p->curve_type[DT_IOP_RGBCURVE_R]);
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(g->chk_compensate_middle_grey),
+                               p->compensate_middle_grey);
+  DT_LEAVE_GUI_UPDATE();
+  _rgbcurve_show_hide_controls(p, g);
+  gtk_widget_queue_draw(GTK_WIDGET(g->area));
+
+  dt_dev_add_history_item(darktable.develop, self, TRUE);
+}
+
+static void _lr_region_history_changed(gpointer instance, dt_iop_module_t *self)
+{
+  _lr_region_update(self); // follows the point editor and the on/off switch
+}
+
+static void _lr_region_gui_init(dt_iop_module_t *self)
+{
+  dt_iop_rgbcurve_gui_data_t *g = self->gui_data;
+  // in the order of Lightroom: Highlights, Lights, Darks, Shadows
+  static const char *names[4] = { N_("shadows"), N_("darks"), N_("lights"), N_("highlights") };
+  static const char *labels[4] = { N_("Shadows"), N_("Darks"), N_("Lights"), N_("Highlights") };
+  static const char *tips[4] = { N_("the darkest quarter of the tones"),
+                                 N_("the darker middle tones"),
+                                 N_("the lighter middle tones"),
+                                 N_("the lightest quarter of the tones") };
+
+  GtkWidget *box = dt_gui_vbox(dt_ui_section_label_new(C_("section", "Region")));
+  for(int i = 3; i >= 0; i--)
+  {
+    g->lr_region[i] = dt_bauhaus_slider_new_with_range(self, -100.0f, 100.0f, 1.0f, 0.0f, 0);
+    dt_bauhaus_widget_set_label(g->lr_region[i], N_("region"), names[i]);
+    dt_bauhaus_widget_set_display_label(g->lr_region[i], _(labels[i]));
+    dt_bauhaus_slider_set_format(g->lr_region[i], "");
+    gtk_widget_set_tooltip_text(g->lr_region[i], _(tips[i]));
+    g_signal_connect(G_OBJECT(g->lr_region[i]), "value-changed",
+                     G_CALLBACK(_lr_region_callback), self);
+    dt_gui_box_add(box, g->lr_region[i]);
+  }
+  dt_gui_box_add(self->widget, box);
+
+  DT_CONTROL_SIGNAL_HANDLE(DT_SIGNAL_DEVELOP_HISTORY_CHANGE, _lr_region_history_changed);
+}
+
 void gui_init(dt_iop_module_t *self)
 {
   dt_iop_rgbcurve_gui_data_t *g = IOP_GUI_ALLOC(rgbcurve);
@@ -1567,6 +1678,9 @@ void gui_init(dt_iop_module_t *self)
   g->cmb_preserve_colors = dt_bauhaus_combobox_from_params(self, "preserve_colors");
   gtk_widget_set_tooltip_text(g->cmb_preserve_colors,
                               _("method to preserve colors when applying contrast"));
+
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui"))
+    _lr_region_gui_init(self);
 }
 
 void gui_update(dt_iop_module_t *self)
@@ -1581,6 +1695,7 @@ void gui_update(dt_iop_module_t *self)
   dt_bauhaus_combobox_set(g->cmb_preserve_colors, p->preserve_colors);
 
   _rgbcurve_show_hide_controls(p, g);
+  _lr_region_update(self);
 
   // that's all, gui curve is read directly from params during expose event.
   gtk_widget_queue_draw(GTK_WIDGET(g->area));

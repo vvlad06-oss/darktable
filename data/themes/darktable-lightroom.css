@@ -456,3 +456,20 @@ notebook tab:checked
   padding: 0 0.4em;
 }
 #lr-export-no-presets { color: #8a8a8a; font-size: 0.9em; margin: 2em 0.5em; }
+
+/* Basic panel: the Auto button on the Tone row */
+#basics-lr-auto
+{
+  padding: 0 0.7em;
+  min-height: 1.3em;
+  margin: 0.55em 0 0.1em 0;
+  border-radius: 3px;
+  border: 1px solid #1c1c1c;
+  background-color: #4a4a4a;
+  color: #e0e0e0;
+}
+
+#basics-lr-auto:hover
+{
+  background-color: #5a5a5a;
+}

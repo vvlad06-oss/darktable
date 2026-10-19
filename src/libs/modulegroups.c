@@ -962,6 +962,90 @@ static dt_iop_module_t *_basics_lr_module(const char *op)
   return NULL;
 }
 
+/* Lightroom "Auto" (Tone): from the preview of the photo, Exposure brings
+   the median tone to the middle, and Highlights / Shadows recover clipped
+   or blocked areas when they are still at 0. The values go through the
+   sliders of the Basic panel, so they are undoable history steps. */
+
+static GtkWidget *_basics_lr_item_widget(dt_lib_module_t *self, const char *id)
+{
+  dt_lib_modulegroups_t *d = self->data;
+  for(const GList *l = d->basics; l; l = g_list_next(l))
+  {
+    const dt_lib_modulegroups_basic_item_t *item = l->data;
+    if(item->widget && !g_strcmp0(item->id, id)) return item->widget;
+  }
+  return NULL;
+}
+
+static void _basics_lr_auto_tone(GtkButton *button, dt_lib_module_t *self)
+{
+  dt_dev_pixelpipe_t *pipe = darktable.develop->preview_pipe;
+  if(!pipe) return;
+
+  // luminance histogram of the preview (display-encoded, BGRx)
+  uint32_t hist[256] = { 0 };
+  uint64_t count = 0;
+  dt_pthread_mutex_lock(&pipe->backbuf_mutex);
+  const uint8_t *buf = pipe->backbuf;
+  const size_t npix = (size_t)pipe->backbuf_width * pipe->backbuf_height;
+  if(buf && npix > 0 && pipe->output_imgid == darktable.develop->image_storage.id)
+  {
+    for(size_t k = 0; k < npix; k++)
+    {
+      const uint8_t *px = buf + 4 * k;
+      const int Y = (int)(0.0722f * px[0] + 0.7152f * px[1] + 0.2126f * px[2] + 0.5f);
+      hist[CLAMP(Y, 0, 255)]++;
+    }
+    count = npix;
+  }
+  dt_pthread_mutex_unlock(&pipe->backbuf_mutex);
+
+  if(count == 0)
+  {
+    dt_control_log(_("the preview of the photo is not ready yet"));
+    return;
+  }
+
+  int median = 0;
+  uint64_t acc = 0;
+  for(; median < 255; median++)
+  {
+    acc += hist[median];
+    if(acc >= count / 2) break;
+  }
+  uint64_t clipped = 0, blocked = 0;
+  for(int v = 245; v < 256; v++) clipped += hist[v];
+  for(int v = 0; v < 10; v++) blocked += hist[v];
+
+  // exposure: move the median tone to about 45 % (display), the tone
+  // mapper compresses about 1.4x around middle gray
+  const float m = MAX(median, 1) / 255.0f;
+  float ev = log2f(powf(0.45f, 2.2f) / powf(m, 2.2f)) / 1.4f;
+  ev = CLAMPF(ev, -3.0f, 3.0f);
+
+  // one undo step for the whole Auto
+  dt_dev_undo_start_record(darktable.develop);
+
+  GtkWidget *exposure = _basics_lr_item_widget(self, "exposure/exposure");
+  if(exposure && fabsf(ev) > 0.02f)
+    dt_bauhaus_slider_set(exposure, dt_bauhaus_slider_get(exposure) + ev);
+
+  // highlights and shadows, only if the user has not set them yet
+  GtkWidget *highlights = _basics_lr_item_widget(self, "shadhi/highlights");
+  const float clipped_frac = (float)clipped / count;
+  if(highlights && dt_bauhaus_slider_get(highlights) == 0.0f && clipped_frac > 0.005f)
+    dt_bauhaus_slider_set(highlights, -CLAMPF(clipped_frac * 600.0f, 10.0f, 60.0f));
+
+  GtkWidget *shadows = _basics_lr_item_widget(self, "shadhi/shadows");
+  const float blocked_frac = (float)blocked / count;
+  if(shadows && dt_bauhaus_slider_get(shadows) == 0.0f && blocked_frac > 0.01f)
+    dt_bauhaus_slider_set(shadows, CLAMPF(blocked_frac * 500.0f, 10.0f, 50.0f));
+
+  dt_dev_undo_end_record(darktable.develop);
+  dt_control_log(_("Auto: exposure %+.2f EV"), ev);
+}
+
 static void _basics_lr_toggle(dt_lib_module_t *self)
 {
   dt_lib_modulegroups_t *d = self->data;
@@ -1048,8 +1132,25 @@ static void _basics_show_lr(dt_lib_module_t *self)
         GtkWidget *sect = dt_ui_section_label_new(item->id + 1);
         gtk_widget_set_name(sect, "basics-lr-section");
         gtk_label_set_xalign(GTK_LABEL(sect), 0.0);
-        gtk_box_pack_start(GTK_BOX(d->mod_vbox_basic), sect, FALSE, FALSE, 0);
-        gtk_widget_show(sect);
+        if(!g_strcmp0(item->id, "#Tone"))
+        {
+          // Lightroom: "Tone ... Auto"
+          GtkWidget *autob = gtk_button_new_with_label(_("Auto"));
+          gtk_widget_set_name(autob, "basics-lr-auto");
+          gtk_widget_set_tooltip_text(autob, _("set the tone of the photo automatically\n"
+                                               "(exposure, and highlights / shadows when needed)"));
+          g_signal_connect(autob, "clicked", G_CALLBACK(_basics_lr_auto_tone), self);
+          GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+          gtk_box_pack_start(GTK_BOX(row), sect, TRUE, TRUE, 0);
+          gtk_box_pack_end(GTK_BOX(row), autob, FALSE, FALSE, 0);
+          gtk_box_pack_start(GTK_BOX(d->mod_vbox_basic), row, FALSE, FALSE, 0);
+          gtk_widget_show_all(row);
+        }
+        else
+        {
+          gtk_box_pack_start(GTK_BOX(d->mod_vbox_basic), sect, FALSE, FALSE, 0);
+          gtk_widget_show(sect);
+        }
       }
       continue;
     }
@@ -2212,6 +2313,7 @@ void init_presets(dt_lib_module_t *self)
   tx = g_strdup("1|0ꬹ1||");
   // treatment and white balance (Lightroom controls of color calibration)
   AM("channelmixerrgb/lightroom/treatment=Treatment");
+  AM("sigmoid/lightroom/profile=Profile");
   AM("channelmixerrgb/lightroom/white balance=WB");
   AM("channelmixerrgb/lightroom/temp=Temp");
   AM("channelmixerrgb/lightroom/tint=Tint");

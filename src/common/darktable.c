@@ -1749,6 +1749,45 @@ int dt_init(int argc,
     dt_conf_set_int("plugins/darkroom/lightroom_ui_version", 2);
   }
 
+  // step 3: shortcutsrc keeps the Lightroom shortcuts of earlier builds as
+  // user shortcuts, which would hide the new ones (\ = Before / After,
+  // ctrl+shift+e / i = Export... / Import... dialogs): drop them, once
+  if(dt_conf_get_bool("plugins/darkroom/lightroom_ui")
+     && dt_conf_get_int("plugins/darkroom/lightroom_ui_version") < 3)
+  {
+    static const char *outdated[] =
+      { "backslash=lib/snapshots/toggle last snapshot",
+        "e;shift;ctrl=lib/export/start export",
+        "i;shift;ctrl=lib/import/add to library...",
+        "disabled;lib/snapshots/toggle before and after",
+        "disabled;global/Export...",
+        "disabled;global/Import..." };
+    char configdir[PATH_MAX] = { 0 };
+    dt_loc_get_user_config_dir(configdir, sizeof(configdir));
+    gchar *rc = g_build_filename(configdir, "shortcutsrc", NULL);
+    gchar *content = NULL;
+    if(g_file_get_contents(rc, &content, NULL, NULL))
+    {
+      gchar **lines = g_strsplit(content, "\n", -1);
+      GString *kept = g_string_new(NULL);
+      for(int l = 0; lines[l]; l++)
+      {
+        gboolean drop = FALSE;
+        for(int i = 0; i < G_N_ELEMENTS(outdated) && !drop; i++)
+          drop = strstr(lines[l], outdated[i]) != NULL;
+        if(drop) continue;
+        g_string_append(kept, lines[l]);
+        if(lines[l + 1]) g_string_append_c(kept, '\n');
+      }
+      g_file_set_contents(rc, kept->str, kept->len, NULL);
+      g_string_free(kept, TRUE);
+      g_strfreev(lines);
+      g_free(content);
+    }
+    g_free(rc);
+    dt_conf_set_int("plugins/darkroom/lightroom_ui_version", 3);
+  }
+
   if(has_workspace)
   {
     // restore dbname & label (as set in call dt_workspace_create) to
