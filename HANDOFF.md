@@ -16,6 +16,7 @@ Proiect: darktable 5.6.2 modificat ca să arate și să se comporte ca Lightroom
 - Încărcare: miniatura pozei + „Loading...”; „working...” mic; **Before / After** pe tasta `\` (eticheta „Before”).
 - Migrări o singură dată, cheia `plugins/darkroom/lightroom_ui_version` (acum 3): panouri ascunse, histogramă, lățimi panouri, curățarea scurtăturilor vechi din `shortcutsrc`.
 - Packaging: `gtk.immodules` nu mai trimite la GTK-ul din Homebrew (altfel aplicația se poate bloca pe Mac-uri cu Homebrew).
+- Versiune: fără tag-uri `release-*` (fork-ul și clonele CI) versiunea era doar hash-ul, iar descărcarea modelelor AI eșua („No compatible AI model release found for Darktable <hash>”). Acum e `5.6.2+0~g<hash>` (`tools/get_git_version_string.sh`); build-9 are încă bug-ul, reparat de la `cbe359e25`.
 
 ## Ce mai e de făcut
 
