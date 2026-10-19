@@ -27,7 +27,8 @@ Proiect: darktable 5.6.2 modificat ca să arate și să se comporte ca Lightroom
 ## Cum se compilează și se testează local
 
 - Dependențe deja instalate pe Mac: Command Line Tools, Homebrew (`/opt/homebrew`), `.ci/Brewfile`, `gh` (logat ca vvlad06-oss).
-- Build: `./build.sh --install --build-generator Ninja --build-type Release --prefix "$PWD/build/macosx" -- -DUSE_GRAPHICSMAGICK=OFF -DUSE_IMAGEMAGICK=ON -DBUILD_TESTING=OFF`
+- Build: `./build.sh --install --build-generator Ninja --build-type Release --prefix "$PWD/build/macosx" -- -DUSE_GRAPHICSMAGICK=OFF -DUSE_IMAGEMAGICK=ON -DBUILD_TESTING=OFF -DUSE_AI=ON` — **fără `-DUSE_AI=ON` lipsesc „Enhance (AI)” (AI Denoise / upscale) și Select Object (AI)**; CI-ul îl pune mereu (`.ci/ci-script.sh`).
 - Pachet `.app`: `packaging/macosx/3_make_hb_darktable_package.sh` — **calea repo-ului nu poate conține spații** (scriptul upstream se rupe).
+- Instalare locală în /Applications: închide darktable, mută `/Applications/darktable.app` la Coș, apoi `ditto build/macosx/package/darktable.app /Applications/darktable.app`.
 - Pentru teste, copiază configurația (`~/.config/darktable` → alt folder, `--configdir`) și dă bundle-ului de test alt id (`org.darktable.lrtest`), ca să nu atingi biblioteca și aplicația instalată.
 - Click-urile trimise în fundal nu ajung bine la GTK pe macOS (folosește poziția reală a cursorului); tastatura merge.
